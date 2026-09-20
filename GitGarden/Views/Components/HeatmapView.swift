@@ -19,18 +19,12 @@ nonisolated enum HeatmapYears {
             return HeatmapYearGroup(
                 year: year,
                 days: slice,
-                total: slice.reduce(0) { $0 + $1.existing }
+                total: slice.reduce(0) { $0 + $1.total }
             )
         }
     }
-}
 
-struct HeatmapView: View {
-    var days: [HeatmapDay]
-    var showsPlanned: Bool = true
-    var cell: CGFloat = 11
-
-    private var weeks: [[HeatmapDay]] {
+    static func weeks(from days: [HeatmapDay]) -> [[HeatmapDay]] {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -56,30 +50,43 @@ struct HeatmapView: View {
         }
         return weeks
     }
+}
+
+struct HeatmapView: View {
+    var days: [HeatmapDay]
+    var showsPlanned: Bool = true
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(alignment: .top, spacing: max(2, cell * 0.18)) {
-                ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
-                    VStack(spacing: max(2, cell * 0.18)) {
-                        ForEach(week, id: \.date) { day in
-                            RoundedRectangle(cornerRadius: max(2, cell * 0.22), style: .continuous)
-                                .fill(color(for: day))
-                                .frame(width: cell, height: cell)
-                                .help("\(day.date): \(day.existing) existing, \(day.planned) planned")
-                        }
-                    }
+        Canvas { context, size in
+            let weeks = HeatmapYears.weeks(from: days)
+            guard !weeks.isEmpty else { return }
+            let gap = max(1.5, min(3, size.width / 220))
+            let cell = min(14, max(5, (size.width - gap * CGFloat(weeks.count + 1)) / CGFloat(weeks.count)))
+            let graphHeight = cell * 7 + gap * 6
+            let originY = max(0, (size.height - graphHeight) / 2)
+            var x = gap
+            for week in weeks {
+                var y = originY
+                for day in week {
+                    let rect = CGRect(x: x, y: y, width: cell, height: cell)
+                    context.fill(
+                        Path(roundedRect: rect, cornerRadius: max(1.5, cell * 0.22)),
+                        with: .color(color(for: day))
+                    )
+                    y += cell + gap
                 }
+                x += cell + gap
             }
-            .padding(4)
         }
-        .frame(minHeight: cell * 7 + 16)
+        .frame(maxWidth: .infinity)
+        .frame(minHeight: 84, idealHeight: 104, maxHeight: 120)
+        .accessibilityLabel("Contribution heatmap")
     }
 
     private func color(for day: HeatmapDay) -> Color {
         let value = showsPlanned ? day.total : day.existing
         switch value {
-        case 0: return Color.primary.opacity(0.06)
+        case 0: return Color.primary.opacity(0.08)
         case 1: return Color(red: 0.72, green: 0.93, blue: 0.72)
         case 2...3: return Color(red: 0.47, green: 0.84, blue: 0.55)
         case 4...6: return Color(red: 0.31, green: 0.72, blue: 0.45)
@@ -91,38 +98,58 @@ struct HeatmapView: View {
 struct ContributionHistoryView: View {
     var days: [HeatmapDay]
     var showsPlanned: Bool = false
-    var cell: CGFloat = 11
+    @State private var selectedYear: Int?
 
     private var groups: [HeatmapYearGroup] {
         HeatmapYears.groups(from: days)
     }
 
+    private var selected: HeatmapYearGroup? {
+        groups.first { $0.year == selectedYear } ?? groups.first
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 10) {
             if groups.isEmpty {
                 Text("No contribution calendar yet")
                     .font(.system(size: 13, design: .rounded))
                     .foregroundStyle(SKTheme.mute)
             } else {
-                ForEach(groups) { group in
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("\(group.total) contributions in \(group.year)")
-                                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                            Spacer()
-                            Text(String(group.year))
-                                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                                .foregroundStyle(SKTheme.mute)
-                        }
-                        HStack(alignment: .center, spacing: 8) {
-                            HeatmapView(days: group.days, showsPlanned: showsPlanned, cell: cell)
-                            Text(String(group.year))
-                                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                                .foregroundStyle(SKTheme.mute)
-                                .frame(width: 36, alignment: .leading)
+                ScrollView(.horizontal) {
+                    HStack(spacing: 6) {
+                        ForEach(groups) { group in
+                            Button {
+                                selectedYear = group.year
+                            } label: {
+                                Text(String(group.year))
+                                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(selected?.year == group.year ? Color.white : SKTheme.mute)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(
+                                        selected?.year == group.year ? SKTheme.accent : SKTheme.accentSoft,
+                                        in: Capsule()
+                                    )
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
                 }
+                .scrollIndicators(.visible, axes: .horizontal)
+                if let selected {
+                    HStack {
+                        Text("\(selected.total) contributions in \(selected.year)")
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        Spacer()
+                    }
+                    HeatmapView(days: selected.days, showsPlanned: showsPlanned)
+                }
+            }
+        }
+        .onAppear { selectedYear = selectedYear ?? groups.first?.year }
+        .onChange(of: groups.map(\.year)) { _, years in
+            if selectedYear == nil || !(years.contains(selectedYear ?? 0)) {
+                selectedYear = years.first
             }
         }
     }

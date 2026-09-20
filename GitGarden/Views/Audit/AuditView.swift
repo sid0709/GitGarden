@@ -4,6 +4,7 @@ import SwiftData
 struct AuditView: View {
     @Environment(\.gardenSearch) private var search
     @Query(sort: \AuditEvent.timestamp, order: .reverse) private var events: [AuditEvent]
+    @State private var page = 0
 
     private var filtered: [AuditEvent] {
         guard !search.isEmpty else { return events }
@@ -26,8 +27,8 @@ struct AuditView: View {
                         .foregroundStyle(SKTheme.mute)
                 }
             } else {
-                ForEach(filtered) { event in
-                    SKCard(padding: 14) {
+                ForEach(SKPaging.slice(filtered, page: page)) { event in
+                    SKCard(padding: 14, lift: false) {
                         HStack {
                             Text(event.method)
                                 .font(.system(size: 12, weight: .bold, design: .rounded))
@@ -51,7 +52,9 @@ struct AuditView: View {
                         }
                     }
                 }
+                SKPagerBar(page: $page, total: filtered.count, noun: "events")
             }
         }
+        .onChange(of: search) { _, _ in page = 0 }
     }
 }

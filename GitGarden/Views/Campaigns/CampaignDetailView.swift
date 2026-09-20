@@ -7,6 +7,8 @@ struct CampaignDetailView: View {
     @Bindable var campaign: Campaign
     @State private var errorMessage: String?
     @State private var showNuke = false
+    @State private var jobPage = 0
+    @State private var resourcePage = 0
 
     var body: some View {
         SKPage {
@@ -18,10 +20,9 @@ struct CampaignDetailView: View {
                         .font(.system(size: 13, design: .rounded))
                         .foregroundStyle(SKTheme.mute)
                     HStack(spacing: 6) {
+                        SKTag(kind: campaign.kind == .issues ? .issue : campaign.kind == .pullRequests ? .pull : .history)
                         SKTag(kind: campaign.dryRun ? .dry : .live)
                         SKTag(kind: statusTag, label: campaign.status.rawValue)
-                        if campaign.collaborator != nil { SKTag(kind: .ux, label: "Cross-account") }
-                        if campaign.includeSocial { SKTag(kind: .social) }
                     }
                 }
                 Spacer()
@@ -51,21 +52,36 @@ struct CampaignDetailView: View {
                             .foregroundStyle(SKTheme.mute)
                     }
                     Stepper(
-                        "Backdated history: \(campaign.historyYears) years",
+                        campaign.kind == .history
+                            ? "Backdated history: \(campaign.historyYears) years"
+                            : campaign.kind == .issues
+                                ? "Issues: \(campaign.issueCount)"
+                                : "Pull requests: \(campaign.prCount)",
                         value: Binding(
-                            get: { campaign.historyYears },
-                            set: { years in
-                                campaign.setHistoryYears(years)
-                                campaign.commitCount = Campaign.suggestedCommitCount(forYears: years)
-                                campaign.prCount = Campaign.suggestedPRCount(forYears: years)
-                                campaign.issueCount = Campaign.suggestedIssueCount(forYears: years)
+                            get: {
+                                switch campaign.kind {
+                                case .history: return campaign.historyYears
+                                case .issues: return campaign.issueCount
+                                case .pullRequests: return campaign.prCount
+                                }
+                            },
+                            set: { value in
+                                switch campaign.kind {
+                                case .history:
+                                    campaign.setHistoryYears(value)
+                                    campaign.commitCount = Campaign.suggestedCommitCount(forYears: value)
+                                case .issues:
+                                    campaign.issueCount = min(160, max(1, value))
+                                case .pullRequests:
+                                    campaign.prCount = min(120, max(1, value))
+                                }
                                 do { try runtime.generatePlan(for: campaign) }
                                 catch { errorMessage = error.localizedDescription }
                             }
                         ),
                         in: 1...20
                     )
-                    ContributionHistoryView(days: plan.heatmap, showsPlanned: true, cell: 11)
+                    ContributionHistoryView(days: plan.heatmap, showsPlanned: true)
                     ProgressView(value: campaign.progress)
                         .tint(SKTheme.accent)
                     HStack {
@@ -77,40 +93,43 @@ struct CampaignDetailView: View {
                 }
             }
 
-            HStack(spacing: 8) {
-                SKQuietButton(title: "Generate plan") {
-                    do { try runtime.generatePlan(for: campaign) }
-                    catch { errorMessage = error.localizedDescription }
-                }
-                SKQuietButton(title: "Simulate") {
-                    do { try runtime.startCampaign(campaign, live: false) }
-                    catch { errorMessage = error.localizedDescription }
-                }
-                SKPrimaryButton(
-                    title: "Run live",
-                    enabled: campaign.status != .running || campaign.dryRun
-                ) {
-                    do { try runtime.startCampaign(campaign, live: true) }
-                    catch { errorMessage = error.localizedDescription }
-                }
-                SKQuietButton(title: "Pause") { runtime.pauseCampaign(campaign) }
-                SKQuietButton(title: "Resume") {
-                    do { try runtime.resumeCampaign(campaign) }
-                    catch { errorMessage = error.localizedDescription }
-                }
-                if campaign.status == .failed {
-                    SKQuietButton(title: "Retry failed") {
-                        do { try runtime.retryCampaign(campaign) }
+            ScrollView(.horizontal) {
+                HStack(spacing: 8) {
+                    SKQuietButton(title: "Generate plan") {
+                        do { try runtime.generatePlan(for: campaign) }
                         catch { errorMessage = error.localizedDescription }
                     }
-                }
-                SKPrimaryButton(title: "Nuke", destructive: true, enabled: !campaign.resources.isEmpty) {
-                    showNuke = true
-                }
-                SKQuietButton(title: "Delete") {
-                    runtime.deleteCampaign(campaign)
+                    SKQuietButton(title: "Simulate") {
+                        do { try runtime.startCampaign(campaign, live: false) }
+                        catch { errorMessage = error.localizedDescription }
+                    }
+                    SKPrimaryButton(
+                        title: "Run live",
+                        enabled: campaign.status != .running || campaign.dryRun
+                    ) {
+                        do { try runtime.startCampaign(campaign, live: true) }
+                        catch { errorMessage = error.localizedDescription }
+                    }
+                    SKQuietButton(title: "Pause") { runtime.pauseCampaign(campaign) }
+                    SKQuietButton(title: "Resume") {
+                        do { try runtime.resumeCampaign(campaign) }
+                        catch { errorMessage = error.localizedDescription }
+                    }
+                    if campaign.status == .failed {
+                        SKQuietButton(title: "Retry failed") {
+                            do { try runtime.retryCampaign(campaign) }
+                            catch { errorMessage = error.localizedDescription }
+                        }
+                    }
+                    SKPrimaryButton(title: "Nuke", destructive: true, enabled: !campaign.resources.isEmpty) {
+                        showNuke = true
+                    }
+                    SKQuietButton(title: "Delete") {
+                        runtime.deleteCampaign(campaign)
+                    }
                 }
             }
+            .scrollIndicators(.visible, axes: .horizontal)
 
             if !campaign.lastError.isEmpty {
                 Text(campaign.lastError)
@@ -122,7 +141,7 @@ struct CampaignDetailView: View {
                 Text("Grown artifacts")
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .foregroundStyle(SKTheme.mute)
-                ForEach(campaign.resources) { resource in
+                ForEach(SKPaging.slice(campaign.resources, page: resourcePage)) { resource in
                     SKCard(padding: 12) {
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
@@ -142,13 +161,14 @@ struct CampaignDetailView: View {
                         }
                     }
                 }
+                SKPagerBar(page: $resourcePage, total: campaign.resources.count, noun: "artifacts")
             }
 
             Text("Score")
                 .font(.system(size: 13, weight: .semibold, design: .rounded))
                 .foregroundStyle(SKTheme.mute)
 
-            ForEach(campaign.jobs.sorted(by: { $0.orderIndex < $1.orderIndex })) { job in
+            ForEach(SKPaging.slice(scoreJobs, page: jobPage)) { job in
                 HStack(alignment: .top, spacing: 12) {
                     VStack {
                         Circle()
@@ -159,7 +179,7 @@ struct CampaignDetailView: View {
                             .frame(width: 2)
                     }
                     .frame(width: 12)
-                    SKCard(padding: 12) {
+                    SKCard(padding: 12, lift: false) {
                         HStack(alignment: .top) {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(job.summary)
@@ -186,6 +206,7 @@ struct CampaignDetailView: View {
                     }
                 }
             }
+            SKPagerBar(page: $jobPage, total: scoreJobs.count, noun: "jobs")
         }
         .alert("Campaign error", isPresented: Binding(
             get: { errorMessage != nil },
@@ -201,6 +222,14 @@ struct CampaignDetailView: View {
         .task {
             await runtime.refreshHeatmap(for: campaign)
         }
+        .onChange(of: campaign.persistentModelID) { _, _ in
+            jobPage = 0
+            resourcePage = 0
+        }
+    }
+
+    private var scoreJobs: [Job] {
+        campaign.jobs.filter { $0.kind != .createRepo }.sorted { $0.orderIndex < $1.orderIndex }
     }
 
     private var people: [(url: String, name: String)] {
@@ -238,7 +267,7 @@ struct NukeConfirmSheet: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Delete resources created by “\(campaign.name)”? Repos the campaign created will be deleted. Issues and PRs will be closed.")
+                Text("Close issues and pull requests this campaign opened on “\(campaign.name)”? The existing target repo is never deleted.")
                     .font(.system(size: 14, design: .rounded))
                 List(NukeOrder.sorted(campaign.resources), id: \.persistentModelID) { resource in
                     VStack(alignment: .leading) {

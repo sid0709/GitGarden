@@ -6,6 +6,8 @@ nonisolated struct PlannerInput: Sendable {
     var ownerEmail: String
     var collaboratorLogin: String?
     var repoName: String
+    var repoOwner: String = ""
+    var defaultBranch: String = "main"
     var repoDescription: String
     var start: Date
     var end: Date
@@ -45,7 +47,7 @@ nonisolated struct Planner: Sendable {
 
         func add(_ kind: StepKind, account: String, summary: String, payload: StepPayload, at scheduled: Date) {
             var payload = payload
-            if payload.owner == nil { payload.owner = input.ownerLogin }
+            if payload.owner == nil { payload.owner = input.repoOwner.isEmpty ? input.ownerLogin : input.repoOwner }
             if payload.repo == nil { payload.repo = input.repoName }
             steps.append(
                 PlanStep(
@@ -59,24 +61,7 @@ nonisolated struct Planner: Sendable {
             )
         }
 
-        if input.includeHistory {
-            add(
-                .createRepo,
-                account: input.ownerLogin,
-                summary: "Create \(input.ownerLogin)/\(input.repoName)",
-                payload: StepPayload(
-                    repo: input.repoName,
-                    owner: input.ownerLogin,
-                    title: input.repoName,
-                    privateRepo: false,
-                    description: input.repoDescription,
-                    language: input.language
-                ),
-                at: schedule()
-            )
-        }
-
-        if let collab = input.collaboratorLogin, input.includeHistory || input.includePRs || input.includeIssues {
+        if let collab = input.collaboratorLogin, input.includePRs || input.includeIssues {
             add(
                 .inviteCollaborator,
                 account: input.ownerLogin,
@@ -96,9 +81,74 @@ nonisolated struct Planner: Sendable {
             )
         }
 
-        let commitDates = input.includeHistory
-            ? cadence.sampleDates(count: max(input.commitCount, 1), from: input.start, to: input.end, persona: input.persona, rng: &rng)
-            : []
+        if input.includeHistory && !input.includePRs && !input.includeIssues {
+            let dates = InnoHistory.commitDates(
+                from: input.start,
+                to: input.end,
+                maxCommits: max(input.commitCount, 1),
+                seed: input.seed
+            )
+            let base = input.defaultBranch.isEmpty ? "main" : input.defaultBranch
+            add(
+                .growHistory,
+                account: input.ownerLogin,
+                summary: "Fake git history on \(input.repoOwner.isEmpty ? input.ownerLogin : input.repoOwner)/\(input.repoName)",
+                payload: StepPayload(
+                    branch: base,
+                    authorDate: input.start,
+                    committerEmail: input.ownerEmail,
+                    committerName: input.ownerName.isEmpty ? input.ownerLogin : input.ownerName
+                ),
+                at: schedule()
+            )
+            add(
+                .push,
+                account: input.ownerLogin,
+                summary: "Push history",
+                payload: StepPayload(branch: base),
+                at: schedule()
+            )
+            if input.includeSocial, let collab = input.collaboratorLogin {
+                add(.follow, account: input.ownerLogin, summary: "Follow \(collab)", payload: StepPayload(username: collab), at: schedule())
+                add(.follow, account: collab, summary: "Follow \(input.ownerLogin)", payload: StepPayload(username: input.ownerLogin), at: schedule())
+                add(.star, account: collab, summary: "Star \(input.repoName)", payload: StepPayload(), at: schedule())
+            }
+            return CampaignPlanDocument(
+                steps: steps,
+                heatmap: HeatmapBuilder.build(dates: dates),
+                summary: PlanSummary(
+                    commitCount: dates.count,
+                    prCount: 0,
+                    issueCount: 0,
+                    reviewCount: 0,
+                    releaseCount: 0,
+                    socialCount: steps.filter { $0.kind == .follow || $0.kind == .star }.count,
+                    estimatedAPICalls: steps.filter { $0.kind == .push }.count
+                ),
+                seed: input.seed
+            )
+        }
+
+        let commitDates: [Date]
+        if input.includeHistory {
+            commitDates = cadence.sampleDates(
+                count: max(input.commitCount, 1),
+                from: input.start,
+                to: input.end,
+                persona: input.persona,
+                rng: &rng
+            )
+        } else if input.includePRs {
+            commitDates = cadence.sampleDates(
+                count: max(input.prCount, 1) * 2,
+                from: input.start,
+                to: input.end,
+                persona: input.persona,
+                rng: &rng
+            )
+        } else {
+            commitDates = []
+        }
 
         var issueCounter = 0
         var issueEvents: [(date: Date, number: Int, slug: String, opener: String)] = []
@@ -134,21 +184,22 @@ nonisolated struct Planner: Sendable {
         }
 
         var state = mutator.seed(language: input.language, repoName: input.repoName)
-        var currentBranch = "main"
+        let base = input.defaultBranch.isEmpty ? "main" : input.defaultBranch
+        var currentBranch = base
         var openPRIndex = 0
         var lastPushCount = 0
         var commitIndex = 0
 
         for (index, date) in commitDates.enumerated() {
             let slug = rng.pick(input.persona.slugs)
-            if input.includePRs, openPRIndex < prSlots.count, date >= prSlots[openPRIndex].anchor, currentBranch == "main" {
+            if input.includePRs, openPRIndex < prSlots.count, date >= prSlots[openPRIndex].anchor, currentBranch == base {
                 let slot = prSlots[openPRIndex]
                 currentBranch = MessageGenerator.branchName(persona: input.persona, slug: slot.slug, rng: &rng)
                 add(
                     .createBranch,
                     account: input.ownerLogin,
                     summary: "Branch \(currentBranch)",
-                    payload: StepPayload(branch: currentBranch, baseBranch: "main", authorDate: date),
+                    payload: StepPayload(branch: currentBranch, baseBranch: base, authorDate: date),
                     at: schedule()
                 )
             }
@@ -178,7 +229,7 @@ nonisolated struct Planner: Sendable {
                 at: schedule()
             )
 
-            if (index + 1) % 12 == 0 || index == commitDates.count - 1 {
+            if index == 0 || (index + 1) % 8 == 0 || index == commitDates.count - 1 {
                 add(
                     .push,
                     account: input.ownerLogin,
@@ -189,7 +240,7 @@ nonisolated struct Planner: Sendable {
                 lastPushCount = index + 1
             }
 
-            if input.includePRs, currentBranch != "main", openPRIndex < prSlots.count {
+            if input.includePRs, currentBranch != base, openPRIndex < prSlots.count {
                 let consumed = commitIndex
                 let enough = consumed > 0 && (index == commitDates.count - 1 || (openPRIndex + 1 < prSlots.count && commitDates[min(index + 1, commitDates.count - 1)] >= prSlots[openPRIndex + 1].anchor) || rng.double() < 0.2)
                 if enough {
@@ -202,7 +253,7 @@ nonisolated struct Planner: Sendable {
                         summary: prTitle,
                         payload: StepPayload(
                             branch: currentBranch,
-                            baseBranch: "main",
+                            baseBranch: base,
                             title: prTitle,
                             body: prBody,
                             relatedIssue: slot.issue
@@ -226,10 +277,10 @@ nonisolated struct Planner: Sendable {
                         .mergePR,
                         account: input.ownerLogin,
                         summary: "Merge \(currentBranch)",
-                        payload: StepPayload(branch: currentBranch, baseBranch: "main"),
+                        payload: StepPayload(branch: currentBranch, baseBranch: base),
                         at: schedule()
                     )
-                    currentBranch = "main"
+                    currentBranch = base
                     openPRIndex += 1
                     _ = lastPushCount
                 }
@@ -237,7 +288,7 @@ nonisolated struct Planner: Sendable {
         }
 
         if lastPushCount < commitDates.count, input.includeHistory, !commitDates.isEmpty {
-            add(.push, account: input.ownerLogin, summary: "Push remaining commits", payload: StepPayload(branch: "main"), at: schedule())
+            add(.push, account: input.ownerLogin, summary: "Push remaining commits", payload: StepPayload(branch: base), at: schedule())
         }
 
         for event in issueEvents {
@@ -272,16 +323,6 @@ nonisolated struct Planner: Sendable {
                     at: schedule()
                 )
             }
-        }
-
-        if input.includeHistory, rng.double() < 0.8, !commitDates.isEmpty {
-            add(
-                .createRelease,
-                account: input.ownerLogin,
-                summary: "Tag v0.1.0",
-                payload: StepPayload(title: "v0.1.0", body: "Initial cut.", tag: "v0.1.0"),
-                at: schedule()
-            )
         }
 
         if input.includeSocial {

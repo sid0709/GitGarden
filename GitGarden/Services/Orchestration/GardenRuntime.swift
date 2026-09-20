@@ -162,16 +162,28 @@ final class GardenRuntime {
         if campaign.status == .running {
             pauseCampaign(campaign)
         }
-        if campaign.repoName.isEmpty {
-            campaign.repoName = campaign.resolvedRepoName(prefix: settings().throwawayPrefix)
+        guard let ref = RepoRef.parse(campaign.repoName, defaultOwner: owner.login) else {
+            throw GitGardenError.missingRepo
         }
+        campaign.repoName = ref.name
         let persona = persona(for: campaign.personaID)
+        let match = owner.cachedRepos.first {
+            $0.name.caseInsensitiveCompare(ref.name) == .orderedSame
+        }
+        let defaultBranch: String
+        if let match, (match.size ?? 0) > 0, let branch = match.defaultBranch, !branch.isEmpty {
+            defaultBranch = branch
+        } else {
+            defaultBranch = "main"
+        }
         let input = PlannerInput(
             ownerLogin: owner.login,
             ownerName: owner.name,
             ownerEmail: owner.email.isEmpty ? "\(owner.login)@users.noreply.github.com" : owner.email,
             collaboratorLogin: campaign.collaborator?.login,
-            repoName: campaign.repoName,
+            repoName: ref.name,
+            repoOwner: ref.owner,
+            defaultBranch: defaultBranch,
             repoDescription: campaign.repoDescription.isEmpty ? campaign.name : campaign.repoDescription,
             start: campaign.startDate,
             end: campaign.endDate,
@@ -250,12 +262,17 @@ final class GardenRuntime {
         campaign.status = .running
         campaign.lastError = ""
         campaign.updatedAt = Date()
+        discardCreateRepoJobs(on: campaign)
         try context.save()
         processDueJobs()
     }
 
     func retryJob(_ job: Job) throws {
         guard let campaign = job.campaign else { return }
+        if job.kind == .createRepo {
+            skipJob(job)
+            return
+        }
         try ConflictGuard.assertCanRun(campaign, context: context, runningLogins: runningLogins)
         job.status = .pending
         job.lastError = ""
@@ -281,6 +298,7 @@ final class GardenRuntime {
         }
         campaign.status = .running
         campaign.lastError = ""
+        discardCreateRepoJobs(on: campaign)
         try context.save()
         processDueJobs()
     }
@@ -289,6 +307,48 @@ final class GardenRuntime {
         pauseCampaign(campaign)
         context.delete(campaign)
         try? context.save()
+    }
+
+    func clearGitGardenWork() throws {
+        for login in Array(accountTasks.keys) {
+            accountTasks[login]?.cancel()
+            accountTasks[login] = nil
+        }
+        runningLogins.removeAll()
+        nextFire = nil
+        heatmaps.removeAll()
+        repositories.removeAll()
+        organizations.removeAll()
+        heatmapLoading.removeAll()
+
+        for campaign in ((try? context.fetch(FetchDescriptor<Campaign>())) ?? []) {
+            context.delete(campaign)
+        }
+        for event in ((try? context.fetch(FetchDescriptor<AuditEvent>())) ?? []) {
+            context.delete(event)
+        }
+        for job in ((try? context.fetch(FetchDescriptor<Job>())) ?? []) {
+            context.delete(job)
+        }
+        for resource in ((try? context.fetch(FetchDescriptor<CreatedResource>())) ?? []) {
+            context.delete(resource)
+        }
+        for snapshot in ((try? context.fetch(FetchDescriptor<CampaignSnapshot>())) ?? []) {
+            context.delete(snapshot)
+        }
+        for account in ((try? context.fetch(FetchDescriptor<Account>())) ?? []) {
+            account.heatmapJSON = nil
+            account.reposJSON = nil
+            account.orgsJSON = nil
+        }
+        try context.save()
+
+        let root = settings().resolvedWorktreePath
+        if let children = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) {
+            for child in children {
+                try? FileManager.default.removeItem(at: child)
+            }
+        }
     }
 
     func deleteAccount(_ account: Account) throws {
@@ -366,12 +426,16 @@ final class GardenRuntime {
         try ConflictGuard.assertCanRun(campaign, context: context, runningLogins: runningLogins)
         campaign.status = .running
         campaign.updatedAt = Date()
+        discardCreateRepoJobs(on: campaign)
         try context.save()
         processDueJobs()
     }
 
     func processDueJobs() {
         lastTick = Date()
+        for campaign in ((try? context.fetch(FetchDescriptor<Campaign>())) ?? []) {
+            discardCreateRepoJobs(on: campaign)
+        }
         let campaigns = ((try? context.fetch(FetchDescriptor<Campaign>())) ?? []).filter { $0.status == .running }
         let dueLogins = Set(campaigns.flatMap(\.involvedLogins))
         nextFire = campaigns
@@ -410,6 +474,13 @@ final class GardenRuntime {
             if job.scheduledAt > Date() {
                 nextFire = job.scheduledAt
                 break
+            }
+            if job.kind == .createRepo {
+                job.status = .skipped
+                job.completedAt = Date()
+                job.lastError = ""
+                try? context.save()
+                continue
             }
             job.status = .running
             job.attempt += 1
@@ -461,41 +532,58 @@ final class GardenRuntime {
             )
             return
         }
-        let client = client(for: account)
+        let gh = GitHubCLI(token: account.token)
         let payload = job.payload
-        let owner = payload.owner ?? campaign.owner?.login ?? account.login
-        let repo = payload.repo ?? campaign.repoName
+        let ref = RepoRef.parse(
+            payload.repo ?? campaign.repoName,
+            defaultOwner: payload.owner ?? campaign.owner?.login ?? account.login
+        )
+        let owner = ref?.owner ?? payload.owner ?? campaign.owner?.login ?? account.login
+        let repo = ref?.name ?? payload.repo ?? campaign.repoName
         let git = BackdatedCommitEngine()
         let root = worktree(for: campaign)
+        let base = payload.baseBranch ?? "main"
 
-        switch job.kind {
-        case .createRepo:
-            let created = try await client.createRepo(
-                name: repo,
-                description: payload.description ?? campaign.repoDescription,
-                isPrivate: payload.privateRepo ?? false
-            )
-            track(kind: .repo, owner: created.owner.login, name: created.name, remoteID: created.id, url: created.htmlUrl, campaign: campaign)
-            try git.prepareWorktree(at: root)
+        func prepareClone() throws {
+            try git.ensureExistingClone(at: root, owner: owner, repo: repo, token: account.token, gh: gh)
             try git.configureIdentity(
                 at: root,
                 name: account.name.isEmpty ? account.login : account.name,
                 email: account.email.isEmpty ? "\(account.login)@users.noreply.github.com" : account.email
             )
-            try git.ensureRemote(at: root, owner: created.owner.login, repo: created.name, token: account.token)
-            audit(account: account.login, method: "POST", path: "/user/repos", status: 201, campaign: campaign.name, message: created.fullName)
+        }
+
+        switch job.kind {
+        case .createRepo:
+            return
+
+        case .growHistory:
+            try prepareClone()
+            let dates = InnoHistory.commitDates(
+                from: campaign.startDate,
+                to: campaign.endDate,
+                maxCommits: max(campaign.commitCount, 1),
+                seed: UInt64(bitPattern: campaign.seed)
+            )
+            let author = payload.committerName ?? (account.name.isEmpty ? account.login : account.name)
+            let email = payload.committerEmail ?? (account.email.isEmpty ? "\(account.login)@users.noreply.github.com" : account.email)
+            let workURL = root
+            try await Task.detached {
+                try FakeHistoryEngine().apply(dates: dates, at: workURL, name: author, email: email)
+            }.value
+            audit(account: account.login, method: "GIT", path: "hello.txt history", status: 0, campaign: campaign.name, message: "\(dates.count) commits")
 
         case .inviteCollaborator:
             guard let username = payload.username else { return }
-            try await client.inviteCollaborator(owner: owner, repo: repo, username: username)
-            audit(account: account.login, method: "PUT", path: "/repos/\(owner)/\(repo)/collaborators/\(username)", status: 201, campaign: campaign.name)
+            try gh.inviteCollaborator(owner: owner, repo: repo, username: username)
+            audit(account: account.login, method: "GH", path: "api repos/\(owner)/\(repo)/collaborators/\(username)", status: 0, campaign: campaign.name)
 
         case .commit:
-            try git.prepareWorktree(at: root)
-            if let branch = payload.branch, branch != "main" {
+            try prepareClone()
+            if let branch = payload.branch, branch != base {
                 try git.checkoutBranch(at: root, name: branch)
             } else {
-                try? git.checkoutMain(at: root)
+                try? git.checkoutMain(at: root, named: base)
             }
             try git.writeFiles(at: root, files: payload.files ?? [])
             try git.commit(
@@ -508,17 +596,17 @@ final class GardenRuntime {
             audit(account: account.login, method: "GIT", path: "commit", status: 0, campaign: campaign.name, message: job.summary)
 
         case .push:
-            try git.ensureRemote(at: root, owner: owner, repo: repo, token: account.token)
-            try git.push(at: root, branch: payload.branch ?? "main")
-            audit(account: account.login, method: "GIT", path: "push", status: 0, campaign: campaign.name, message: payload.branch ?? "main")
+            try prepareClone()
+            try git.push(at: root, branch: payload.branch ?? base)
+            audit(account: account.login, method: "GIT", path: "push", status: 0, campaign: campaign.name, message: payload.branch ?? base)
 
         case .createBranch:
-            try git.prepareWorktree(at: root)
+            try prepareClone()
             try git.checkoutBranch(at: root, name: payload.branch ?? "feat/work")
             audit(account: account.login, method: "GIT", path: "checkout", status: 0, campaign: campaign.name, message: payload.branch ?? "")
 
         case .createIssue:
-            let issue = try await client.createIssue(
+            let issue = try gh.createIssue(
                 owner: owner,
                 repo: repo,
                 title: payload.title ?? "Issue",
@@ -528,75 +616,70 @@ final class GardenRuntime {
             updated.issueNumber = issue.number
             job.payload = updated
             remapIssue(planNumber: payload.issueNumber, actual: issue.number, campaign: campaign)
-            track(kind: .issue, owner: owner, name: repo, number: issue.number, remoteID: issue.id, url: issue.htmlUrl, campaign: campaign)
-            audit(account: account.login, method: "POST", path: "/repos/\(owner)/\(repo)/issues", status: 201, campaign: campaign.name, message: "#\(issue.number)")
+            track(kind: .issue, owner: owner, name: repo, number: issue.number, remoteID: issue.number, url: issue.url, campaign: campaign)
+            audit(account: account.login, method: "GH", path: "issue create \(owner)/\(repo)", status: 0, campaign: campaign.name, message: "#\(issue.number)")
 
         case .commentIssue:
             let number = resolvedIssue(payload.issueNumber, campaign: campaign)
-            try await client.commentIssue(owner: owner, repo: repo, number: number, body: payload.body ?? "")
-            audit(account: account.login, method: "POST", path: "/repos/\(owner)/\(repo)/issues/\(number)/comments", status: 201, campaign: campaign.name)
+            try gh.commentIssue(owner: owner, repo: repo, number: number, body: payload.body ?? "")
+            audit(account: account.login, method: "GH", path: "issue comment \(number)", status: 0, campaign: campaign.name)
 
         case .closeIssue:
             let number = resolvedIssue(payload.issueNumber, campaign: campaign)
-            try await client.patchIssue(owner: owner, repo: repo, number: number, state: "closed")
-            audit(account: account.login, method: "PATCH", path: "/repos/\(owner)/\(repo)/issues/\(number)", status: 200, campaign: campaign.name)
+            try gh.closeIssue(owner: owner, repo: repo, number: number)
+            audit(account: account.login, method: "GH", path: "issue close \(number)", status: 0, campaign: campaign.name)
 
         case .createPR:
-            let pull = try await client.createPull(
+            let pull = try gh.createPull(
                 owner: owner,
                 repo: repo,
                 title: payload.title ?? "Update",
                 body: payload.body ?? "",
                 head: payload.branch ?? "feat/work",
-                base: payload.baseBranch ?? "main"
+                base: payload.baseBranch ?? base
             )
             var updated = payload
             updated.prNumber = pull.number
             job.payload = updated
             remapPR(branch: payload.branch ?? "", actual: pull.number, campaign: campaign)
-            track(kind: .pullRequest, owner: owner, name: repo, number: pull.number, remoteID: pull.id, url: pull.htmlUrl, campaign: campaign)
-            audit(account: account.login, method: "POST", path: "/repos/\(owner)/\(repo)/pulls", status: 201, campaign: campaign.name, message: "#\(pull.number)")
+            track(kind: .pullRequest, owner: owner, name: repo, number: pull.number, remoteID: pull.number, url: pull.url, campaign: campaign)
+            audit(account: account.login, method: "GH", path: "pr create \(owner)/\(repo)", status: 0, campaign: campaign.name, message: "#\(pull.number)")
 
         case .reviewPR:
             let number = resolvedPR(payload.prNumber, branch: payload.branch, campaign: campaign)
-            try await client.reviewPull(owner: owner, repo: repo, number: number, body: payload.body ?? "Looks good.")
-            audit(account: account.login, method: "POST", path: "/repos/\(owner)/\(repo)/pulls/\(number)/reviews", status: 200, campaign: campaign.name)
+            try gh.reviewPull(owner: owner, repo: repo, number: number, body: payload.body ?? "Looks good.")
+            audit(account: account.login, method: "GH", path: "pr review \(number)", status: 0, campaign: campaign.name)
 
         case .mergePR:
             let number = resolvedPR(payload.prNumber, branch: payload.branch, campaign: campaign)
-            try await client.mergePull(owner: owner, repo: repo, number: number)
+            try gh.mergePull(owner: owner, repo: repo, number: number)
             try? git.pullMain(at: root)
-            audit(account: account.login, method: "PUT", path: "/repos/\(owner)/\(repo)/pulls/\(number)/merge", status: 200, campaign: campaign.name)
+            audit(account: account.login, method: "GH", path: "pr merge \(number)", status: 0, campaign: campaign.name)
 
         case .createRelease:
-            let release = try await client.createRelease(
+            let url = try gh.createRelease(
                 owner: owner,
                 repo: repo,
                 tag: payload.tag ?? "v0.1.0",
                 name: payload.title ?? payload.tag ?? "v0.1.0",
                 body: payload.body ?? ""
             )
-            track(kind: .release, owner: owner, name: release.tagName, remoteID: release.id, url: release.htmlUrl, campaign: campaign)
-            audit(account: account.login, method: "POST", path: "/repos/\(owner)/\(repo)/releases", status: 201, campaign: campaign.name)
+            track(kind: .release, owner: owner, name: payload.tag ?? "v0.1.0", remoteID: 0, url: url, campaign: campaign)
+            audit(account: account.login, method: "GH", path: "release create \(owner)/\(repo)", status: 0, campaign: campaign.name)
 
         case .patchProfile:
-            _ = try await client.patchUser(bio: payload.bio, name: payload.committerName)
-            audit(account: account.login, method: "PATCH", path: "/user", status: 200, campaign: campaign.name)
+            try gh.patchProfile(bio: payload.bio, name: payload.committerName)
+            audit(account: account.login, method: "GH", path: "api user", status: 0, campaign: campaign.name)
 
         case .follow:
             guard let username = payload.username else { return }
-            try await client.follow(username: username)
-            audit(account: account.login, method: "PUT", path: "/user/following/\(username)", status: 204, campaign: campaign.name)
+            try gh.follow(username: username)
+            audit(account: account.login, method: "GH", path: "api user/following/\(username)", status: 0, campaign: campaign.name)
 
         case .star:
-            try await client.star(owner: owner, repo: repo)
-            audit(account: account.login, method: "PUT", path: "/user/starred/\(owner)/\(repo)", status: 204, campaign: campaign.name)
+            try gh.star(owner: owner, repo: repo)
+            audit(account: account.login, method: "GH", path: "api user/starred/\(owner)/\(repo)", status: 0, campaign: campaign.name)
         }
-
-        let rate = await client.lastRateLimit
-        account.rateLimitRemaining = rate.remaining
-        account.rateLimitLimit = rate.limit
-        account.rateLimitReset = rate.reset
     }
 
     func nuke(_ campaign: Campaign) async throws {
@@ -606,20 +689,17 @@ final class GardenRuntime {
         let resources = NukeOrder.sorted(campaign.resources)
         for resource in resources {
             guard let account = campaign.owner ?? account(named: resource.ownerLogin) else { continue }
-            let client = client(for: account)
+            let gh = GitHubCLI(token: account.token)
             do {
                 switch resource.kind {
                 case .pullRequest:
-                    try await client.patchIssue(owner: resource.ownerLogin, repo: resource.name, number: resource.number, state: "closed")
-                    audit(account: account.login, method: "PATCH", path: "/repos/\(resource.ownerLogin)/\(resource.name)/issues/\(resource.number)", status: 200, campaign: campaign.name, message: "close PR")
+                    try gh.closePull(owner: resource.ownerLogin, repo: resource.name, number: resource.number)
+                    audit(account: account.login, method: "GH", path: "pr close \(resource.number)", status: 0, campaign: campaign.name, message: "close PR")
                 case .issue:
-                    try await client.patchIssue(owner: resource.ownerLogin, repo: resource.name, number: resource.number, state: "closed")
-                    audit(account: account.login, method: "PATCH", path: "/repos/\(resource.ownerLogin)/\(resource.name)/issues/\(resource.number)", status: 200, campaign: campaign.name, message: "close issue")
-                case .release, .gist:
+                    try gh.closeIssue(owner: resource.ownerLogin, repo: resource.name, number: resource.number)
+                    audit(account: account.login, method: "GH", path: "issue close \(resource.number)", status: 0, campaign: campaign.name, message: "close issue")
+                case .release, .gist, .repo:
                     break
-                case .repo:
-                    try await client.deleteRepo(owner: resource.ownerLogin, repo: resource.name)
-                    audit(account: account.login, method: "DELETE", path: "/repos/\(resource.ownerLogin)/\(resource.name)", status: 204, campaign: campaign.name)
                 }
             } catch {
                 audit(account: account.login, method: "NUKE", path: resource.label, status: 500, campaign: campaign.name, message: error.localizedDescription)
@@ -654,6 +734,23 @@ final class GardenRuntime {
             }
         } catch {
             audit(account: owner.login, method: "POST", path: "/graphql", status: 500, campaign: campaign.name, message: error.localizedDescription)
+        }
+    }
+
+    private func discardCreateRepoJobs(on campaign: Campaign) {
+        var skippedFailedCreate = false
+        for job in campaign.jobs where job.kind == .createRepo {
+            if job.status == .failed { skippedFailedCreate = true }
+            if job.status != .skipped {
+                job.status = .skipped
+                job.lastError = ""
+                job.completedAt = Date()
+            }
+        }
+        let otherFailures = campaign.jobs.contains { $0.kind != .createRepo && $0.status == .failed }
+        if skippedFailedCreate, campaign.status == .failed, !otherFailures {
+            campaign.status = .running
+            campaign.lastError = ""
         }
     }
 

@@ -74,7 +74,7 @@ struct AccountStatGrid: View {
     }
 
     var body: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 12)], spacing: 12) {
             SKMetricChip(title: "Repos", value: "\(max(account.totalRepoCount, repos.count))", kind: .history)
             SKMetricChip(title: "Followers", value: "\(account.followers)", kind: .social)
             SKMetricChip(title: "Following", value: "\(account.following)", kind: .profile)
@@ -87,6 +87,7 @@ struct RepoListView: View {
     var repos: [GitHubRepo]
     var query: String = ""
     @Environment(\.colorScheme) private var scheme
+    @State private var page = 0
 
     private var filtered: [GitHubRepo] {
         let sorted = repos.sorted { $0.sortDate > $1.sortDate }
@@ -97,6 +98,10 @@ struct RepoListView: View {
             || ($0.description ?? "").localizedCaseInsensitiveContains(query)
             || ($0.language ?? "").localizedCaseInsensitiveContains(query)
         }
+    }
+
+    private var visible: [GitHubRepo] {
+        SKPaging.slice(filtered, page: page, pageSize: 12)
     }
 
     var body: some View {
@@ -111,13 +116,13 @@ struct RepoListView: View {
                     .foregroundStyle(SKTheme.mute)
             }
             if filtered.isEmpty {
-                SKCard {
+                SKCard(lift: false) {
                     Text("No repositories visible to this token")
                         .font(.system(size: 13, design: .rounded))
                         .foregroundStyle(SKTheme.mute)
                 }
             } else {
-                ForEach(filtered, id: \.id) { repo in
+                ForEach(visible, id: \.id) { repo in
                     Button {
                         if let url = URL(string: repo.htmlUrl) {
                             NSWorkspace.shared.open(url)
@@ -165,6 +170,7 @@ struct RepoListView: View {
                     }
                     .buttonStyle(.plain)
                 }
+                SKPagerBar(page: $page, total: filtered.count, pageSize: 12, noun: "repos")
             }
         }
     }

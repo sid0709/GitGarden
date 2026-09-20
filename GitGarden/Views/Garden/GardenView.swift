@@ -8,7 +8,6 @@ struct GardenView: View {
     @Environment(\.colorScheme) private var scheme
     @Query(sort: \Account.login) private var accounts: [Account]
     @Query(sort: \Campaign.updatedAt, order: .reverse) private var campaigns: [Campaign]
-    @Query(sort: \Job.scheduledAt) private var jobs: [Job]
     @Query(sort: \PersonaRecord.name) private var personas: [PersonaRecord]
     @State private var selectedLogin: String?
     @State private var showAdd = false
@@ -82,11 +81,11 @@ struct GardenView: View {
                 }
             }
 
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 12)], spacing: 12) {
                 SKMetricChip(title: "Accounts", value: "\(accounts.count)", kind: .ui)
                 SKMetricChip(title: "Campaigns", value: "\(campaigns.count)", kind: .history)
                 SKMetricChip(title: "Running", value: "\(campaigns.filter { $0.status == .running }.count)", kind: .running)
-                SKMetricChip(title: "Queued", value: "\(jobs.filter { $0.status == .pending }.count)", kind: .pending)
+                SKMetricChip(title: "Queued", value: "\(queuedCount)", kind: .pending)
             }
 
             if let account = selectedAccount {
@@ -115,7 +114,7 @@ struct GardenView: View {
                         SKTag(kind: account.isFineGrained ? .ux : .ui, label: account.isFineGrained ? "Fine-grained" : "Classic PAT")
                     }
                     AccountProfileFacts(account: account)
-                    ContributionHistoryView(days: plotDays, showsPlanned: true, cell: 11)
+                    ContributionHistoryView(days: plotDays, showsPlanned: true)
                     SKRateBar(remaining: account.rateLimitRemaining, limit: max(account.rateLimitLimit, 1))
                     if let next = runtime.nextFire {
                         Text("Next job \(next.formatted(date: .abbreviated, time: .shortened))")
@@ -234,6 +233,10 @@ struct GardenView: View {
         .onChange(of: accounts.count) { _, _ in
             if selectedLogin == nil { selectedLogin = accounts.first?.login }
         }
+    }
+
+    private var queuedCount: Int {
+        campaigns.reduce(0) { $0 + $1.jobs.filter { $0.status == .pending }.count }
     }
 
     private func joinedLine(for account: Account) -> String {

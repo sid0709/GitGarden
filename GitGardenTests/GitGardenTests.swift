@@ -53,7 +53,8 @@ struct GitGardenTests {
         )
         let plan = Planner().build(input)
         #expect(plan.summary.commitCount == 24)
-        #expect(plan.steps.contains { $0.kind == .createRepo })
+        #expect(!plan.steps.contains { $0.kind == .createRepo })
+        #expect(plan.steps.contains { $0.kind == .commit })
         #expect(plan.steps.contains { $0.kind == .inviteCollaborator })
         #expect(plan.steps.contains { $0.kind == .createIssue })
         #expect(plan.steps.contains { $0.kind == .commentIssue })
@@ -68,6 +69,62 @@ struct GitGardenTests {
         #expect(!plan.heatmap.isEmpty)
         let commits = plan.steps.filter { $0.kind == .commit }
         #expect(commits.allSatisfy { !($0.payload.files ?? []).isEmpty })
+    }
+
+    @Test func plannerSplitsHistoryIssuesAndPulls() {
+        let persona = Persona.rustaceanFallback
+        func base(history: Bool, prs: Bool, issues: Bool, commits: Int, prCount: Int, issueCount: Int) -> PlannerInput {
+            PlannerInput(
+                ownerLogin: "alice",
+                ownerName: "Alice",
+                ownerEmail: "a@x.com",
+                collaboratorLogin: nil,
+                repoName: "RepoPlay",
+                repoDescription: "",
+                start: Date(timeIntervalSince1970: 1_700_000_000),
+                end: Date(timeIntervalSince1970: 1_710_000_000),
+                commitCount: commits,
+                prCount: prCount,
+                issueCount: issueCount,
+                includeHistory: history,
+                includePRs: prs,
+                includeIssues: issues,
+                includeProfile: false,
+                includeSocial: false,
+                dripMode: false,
+                dripInterval: 45,
+                persona: persona,
+                seed: 11,
+                language: "rust"
+            )
+        }
+        let history = Planner().build(base(history: true, prs: false, issues: false, commits: 8, prCount: 0, issueCount: 0))
+        #expect(history.summary.commitCount == 8)
+        #expect(history.summary.prCount == 0)
+        #expect(history.summary.issueCount == 0)
+        #expect(history.steps.contains { $0.kind == .growHistory })
+        #expect(history.steps.contains { $0.kind == .push })
+        #expect(!history.steps.contains { $0.kind == .commit || $0.kind == .createIssue || $0.kind == .createPR })
+
+        let issues = Planner().build(base(history: false, prs: false, issues: true, commits: 0, prCount: 0, issueCount: 5))
+        #expect(issues.summary.commitCount == 0)
+        #expect(issues.summary.issueCount == 5)
+        #expect(!issues.steps.contains { $0.kind == .commit || $0.kind == .createPR })
+
+        let pulls = Planner().build(base(history: false, prs: true, issues: false, commits: 0, prCount: 3, issueCount: 0))
+        #expect(pulls.summary.prCount >= 1)
+        #expect(pulls.steps.contains { $0.kind == .commit })
+        #expect(pulls.steps.contains { $0.kind == .createPR })
+        #expect(!pulls.steps.contains { $0.kind == .createIssue })
+    }
+
+    @Test func innoHistoryWalksDaysAndCapsCommits() {
+        let start = Date(timeIntervalSince1970: 1_577_836_800)
+        let end = start.addingTimeInterval(86400 * 400)
+        let dates = InnoHistory.commitDates(from: start, to: end, maxCommits: 40, seed: 7)
+        #expect(dates.count == 40)
+        #expect(dates == dates.sorted())
+        #expect(dates.allSatisfy { $0 >= start && $0 <= end.addingTimeInterval(86400) })
     }
 
     @Test func socialLayerIsOptIn() {
@@ -245,6 +302,7 @@ struct GitGardenTests {
         campaign.includeProfile = false
         campaign.includeSocial = false
         campaign.commitCount = 3
+        campaign.repoName = "demo"
         container.mainContext.insert(campaign)
         try runtime.generatePlan(for: campaign)
         #expect(!campaign.jobs.isEmpty)
@@ -262,5 +320,107 @@ struct GitGardenTests {
         runtime.pauseCampaign(campaign)
         #expect(!campaign.dryRun)
         #expect(campaign.jobs.contains { $0.status == .pending })
+    }
+
+    @Test @MainActor func clearGitGardenWorkKeepsAccountsAndDropsCampaigns() throws {
+        let schema = Schema([
+            Account.self, PersonaRecord.self, Campaign.self, Job.self,
+            CreatedResource.self, AuditEvent.self, CampaignSnapshot.self, AppSettings.self
+        ])
+        let container = try ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let runtime = GardenRuntime(modelContainer: container)
+        runtime.seedDefaults()
+        let account = Account(login: "alice", name: "Alice", email: "a@x.com", token: "test")
+        account.heatmapJSON = Data("[]".utf8)
+        container.mainContext.insert(account)
+        let campaign = Campaign(name: "old run", owner: account)
+        campaign.repoName = "RepoPlay"
+        container.mainContext.insert(campaign)
+        try runtime.generatePlan(for: campaign)
+        container.mainContext.insert(AuditEvent(accountLogin: "alice", method: "GIT", path: "commit", statusCode: 0))
+        runtime.heatmaps["alice"] = [HeatmapDay(date: "2017-01-01", existing: 1, planned: 0)]
+        try runtime.clearGitGardenWork()
+        let campaigns = try container.mainContext.fetch(FetchDescriptor<Campaign>())
+        let jobs = try container.mainContext.fetch(FetchDescriptor<Job>())
+        let events = try container.mainContext.fetch(FetchDescriptor<AuditEvent>())
+        let accounts = try container.mainContext.fetch(FetchDescriptor<Account>())
+        #expect(campaigns.isEmpty)
+        #expect(jobs.isEmpty)
+        #expect(events.isEmpty)
+        #expect(accounts.map(\.login) == ["alice"])
+        #expect(accounts.first?.heatmapJSON == nil)
+        #expect(runtime.heatmaps.isEmpty)
+    }
+
+    @Test @MainActor func failedCreateRepoJobsAreSkippedAndNeverRetried() throws {
+        let schema = Schema([
+            Account.self, PersonaRecord.self, Campaign.self, Job.self,
+            CreatedResource.self, AuditEvent.self, CampaignSnapshot.self, AppSettings.self
+        ])
+        let container = try ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let runtime = GardenRuntime(modelContainer: container)
+        runtime.seedDefaults()
+        let account = Account(login: "alice", name: "Alice", email: "a@x.com", token: "test")
+        container.mainContext.insert(account)
+        let campaign = Campaign(name: "existing repo only", owner: account)
+        campaign.repoName = "RepoPlay"
+        campaign.status = .failed
+        container.mainContext.insert(campaign)
+        let create = Job(
+            step: PlanStep(
+                id: "create",
+                kind: .createRepo,
+                accountLogin: "alice",
+                scheduledAt: Date(),
+                summary: "Create alice/RepoPlay",
+                payload: StepPayload(repo: "RepoPlay", owner: "alice")
+            ),
+            orderIndex: 0,
+            campaign: campaign
+        )
+        create.status = .failed
+        create.lastError = "Rate limited on POST /user/repos"
+        container.mainContext.insert(create)
+        runtime.processDueJobs()
+        #expect(create.status == .skipped)
+        #expect(create.lastError.isEmpty)
+        #expect(campaign.status != .failed)
+    }
+
+    @Test func repoRefParsesOwnerNameAndURL() {
+        let slash = RepoRef.parse("omnimuh730/RepoPlay", defaultOwner: "alice")
+        #expect(slash?.owner == "omnimuh730")
+        #expect(slash?.name == "RepoPlay")
+        let short = RepoRef.parse("RepoPlay", defaultOwner: "omnimuh730")
+        #expect(short?.fullName == "omnimuh730/RepoPlay")
+        let url = RepoRef.parse("https://github.com/omnimuh730/RepoPlay.git", defaultOwner: "alice")
+        #expect(url?.fullName == "omnimuh730/RepoPlay")
+        #expect(RepoRef.parse("  ", defaultOwner: "alice") == nil)
+    }
+
+    @Test func ghOutputParsesIssueAndPullURLs() {
+        #expect(GhOutput.resourceNumber(in: "https://github.com/a/b/issues/12") == 12)
+        #expect(GhOutput.firstURL(in: "Opened https://github.com/a/b/pull/3\n") == "https://github.com/a/b/pull/3")
+        #expect(GhOutput.alreadyExists("GraphQL: Name already exists on this account"))
+    }
+
+    @Test @MainActor func generatePlanRequiresExistingRepo() throws {
+        let schema = Schema([
+            Account.self, PersonaRecord.self, Campaign.self, Job.self,
+            CreatedResource.self, AuditEvent.self, CampaignSnapshot.self, AppSettings.self
+        ])
+        let container = try ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let runtime = GardenRuntime(modelContainer: container)
+        runtime.seedDefaults()
+        let account = Account(login: "alice", name: "Alice", email: "a@x.com", token: "test")
+        container.mainContext.insert(account)
+        let campaign = Campaign(name: "needs repo", owner: account)
+        container.mainContext.insert(campaign)
+        do {
+            try runtime.generatePlan(for: campaign)
+            Issue.record("expected missing repo")
+        } catch GitGardenError.missingRepo {
+            // expected
+        }
     }
 }

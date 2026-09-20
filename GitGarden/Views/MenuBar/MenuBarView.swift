@@ -21,7 +21,7 @@ struct MenuBarView: View {
                     .font(.system(size: 13, design: .rounded))
                     .foregroundStyle(SKTheme.mute)
             } else {
-                ForEach(running) { campaign in
+                ForEach(running.prefix(8)) { campaign in
                     HStack {
                         Circle().fill(SKTheme.accent).frame(width: 8, height: 8)
                         Text(campaign.name)

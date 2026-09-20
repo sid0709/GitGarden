@@ -18,9 +18,14 @@ struct ContentView: View {
                         .id(selection)
                         .skSoftTransition()
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
                 .animation(SKMotion.spring, value: selection)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .frame(minWidth: 960, minHeight: 640)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(SKTheme.canvasColor(for: scheme))
         .environment(\.gardenSearch, search)
         .onAppear { runtime.seedDefaults() }

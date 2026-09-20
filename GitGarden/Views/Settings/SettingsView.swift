@@ -4,22 +4,45 @@ import SwiftData
 struct SettingsView: View {
     @Environment(GardenRuntime.self) private var runtime
     @State private var settings: AppSettings?
+    @State private var showClearWork = false
+    @State private var clearError: String?
 
     var body: some View {
         SKPage {
             Text("House rules")
                 .font(.system(size: 22, weight: .bold, design: .rounded))
             if let settings {
-                SettingsForm(settings: settings)
+                SettingsForm(settings: settings, showClearWork: $showClearWork)
             }
         }
         .onAppear { settings = runtime.settings() }
+        .alert("Clear GitGarden work?", isPresented: $showClearWork) {
+            Button("Cancel", role: .cancel) {}
+            Button("Clear", role: .destructive) {
+                do {
+                    try runtime.clearGitGardenWork()
+                } catch {
+                    clearError = error.localizedDescription
+                }
+            }
+        } message: {
+            Text("Deletes campaigns, the job queue, audit log, cached graphs, and local worktrees. Saved accounts and GitHub git history are not touched.")
+        }
+        .alert("Could not clear work", isPresented: Binding(
+            get: { clearError != nil },
+            set: { if !$0 { clearError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(clearError ?? "")
+        }
     }
 }
 
 struct SettingsForm: View {
     @Environment(GardenRuntime.self) private var runtime
     @Bindable var settings: AppSettings
+    @Binding var showClearWork: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -39,6 +62,16 @@ struct SettingsForm: View {
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(SKTheme.mute)
                     .textSelection(.enabled)
+            }
+            SKCard {
+                Text("GitGarden work")
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                Text("Clear this app’s cache, campaign history, and session. Git commits already on GitHub stay.")
+                    .font(.system(size: 13, design: .rounded))
+                    .foregroundStyle(SKTheme.mute)
+                SKPrimaryButton(title: "Clear cache, history, and session", destructive: true) {
+                    showClearWork = true
+                }
             }
             SKCard {
                 Text("About")

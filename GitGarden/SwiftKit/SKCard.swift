@@ -3,6 +3,7 @@ import SwiftUI
 struct SKCard<Content: View>: View {
     var padding: CGFloat = 16
     var rotateOnHover: Bool = false
+    var lift: Bool = true
     @ViewBuilder var content: Content
     @Environment(\.colorScheme) private var scheme
 
@@ -15,7 +16,20 @@ struct SKCard<Content: View>: View {
                 RoundedRectangle(cornerRadius: SKTheme.radiusCard, style: .continuous)
                     .stroke(SKTheme.hairline, lineWidth: 1)
             }
-            .skLift(rotate: rotateOnHover)
+            .modifier(ConditionalLift(enabled: lift, rotate: rotateOnHover))
+    }
+}
+
+private struct ConditionalLift: ViewModifier {
+    var enabled: Bool
+    var rotate: Bool
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.skLift(rotate: rotate)
+        } else {
+            content
+        }
     }
 }
 

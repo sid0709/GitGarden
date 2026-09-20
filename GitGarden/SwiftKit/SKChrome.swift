@@ -94,8 +94,8 @@ struct SKPage<Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {
-        ScrollView(showsIndicators: false) {
-            VStack(alignment: .leading, spacing: spacing) {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: spacing) {
                 content
             }
             .padding(.horizontal, 28)
@@ -104,6 +104,8 @@ struct SKPage<Content: View>: View {
             .frame(maxWidth: 1180, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .scrollIndicators(.visible, axes: .vertical)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 

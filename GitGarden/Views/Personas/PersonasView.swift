@@ -66,17 +66,22 @@ struct PersonasView: View {
             }
             .padding(18)
             .frame(width: 260)
+            .frame(maxHeight: .infinity, alignment: .top)
             .background(SKTheme.railColor(for: scheme))
             .overlay(alignment: .trailing) { Rectangle().fill(SKTheme.hairline).frame(width: 1) }
 
-            if let persona = personas.first(where: { $0.persistentModelID == selected }) ?? filtered.first {
-                PersonaEditorView(persona: persona)
-                    .id(persona.persistentModelID)
-            } else {
-                ContentUnavailableView("Select a persona", systemImage: "sparkles")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Group {
+                if let persona = personas.first(where: { $0.persistentModelID == selected }) ?? filtered.first {
+                    PersonaEditorView(persona: persona)
+                        .id(persona.persistentModelID)
+                } else {
+                    ContentUnavailableView("Select a persona", systemImage: "sparkles")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { if selected == nil { selected = personas.first?.persistentModelID } }
     }
 }
@@ -97,6 +102,7 @@ struct PersonaEditorView: View {
                 .font(.system(.body, design: .monospaced))
                 .scrollContentBackground(.hidden)
                 .padding(12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(SKTheme.canvasColor(for: scheme), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             if let parseError {
                 Text(parseError).foregroundStyle(SKTheme.coral)
@@ -119,6 +125,7 @@ struct PersonaEditorView: View {
             }
         }
         .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear { draft = persona.yamlBody }
         .onChange(of: persona.personaID) { _, _ in
             draft = persona.yamlBody

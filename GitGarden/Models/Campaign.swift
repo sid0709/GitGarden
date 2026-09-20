@@ -59,7 +59,7 @@ final class Campaign {
         self.dryRun = false
         self.dripMode = false
         self.dripInterval = 45
-        self.throwawayRepo = true
+        self.throwawayRepo = false
         let now = Date()
         self.endDate = now
         self.startDate = Calendar.current.date(byAdding: .year, value: -10, to: now) ?? now
@@ -108,7 +108,8 @@ final class Campaign {
     }
 
     var defaultRepoName: String {
-        resolvedRepoName(prefix: "gitgarden-test-")
+        if !repoName.isEmpty { return repoName }
+        return "pick a repo"
     }
 
     func resolvedRepoName(prefix: String) -> String {

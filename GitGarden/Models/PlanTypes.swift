@@ -35,10 +35,12 @@ nonisolated enum StepKind: String, Codable, CaseIterable, Sendable {
     case patchProfile
     case follow
     case star
+    case growHistory
 
     var requiredScopes: [String] {
         switch self {
-        case .createRepo, .inviteCollaborator, .commit, .push, .createIssue, .commentIssue, .closeIssue, .createBranch, .createPR, .reviewPR, .mergePR, .createRelease:
+        case .createRepo, .inviteCollaborator, .commit, .push, .createIssue, .commentIssue, .closeIssue, .createBranch, .createPR, .reviewPR, .mergePR, .createRelease, .growHistory:
+            return ["repo"]
             return ["repo"]
         case .patchProfile, .follow:
             return ["user"]
@@ -49,7 +51,7 @@ nonisolated enum StepKind: String, Codable, CaseIterable, Sendable {
 
     var title: String {
         switch self {
-        case .createRepo: return "Create repo"
+        case .createRepo: return "Open existing repo"
         case .inviteCollaborator: return "Invite collaborator"
         case .commit: return "Commit"
         case .push: return "Push"
@@ -64,6 +66,7 @@ nonisolated enum StepKind: String, Codable, CaseIterable, Sendable {
         case .patchProfile: return "Edit profile"
         case .follow: return "Follow user"
         case .star: return "Star repo"
+        case .growHistory: return "Fake git history"
         }
     }
 }
@@ -158,6 +161,7 @@ nonisolated enum GitGardenError: Error, LocalizedError, Sendable {
     case gitFailed(String)
     case api(String)
     case planMissing
+    case missingRepo
     case cancelled
     case nukeBlocked(String)
 
@@ -170,9 +174,33 @@ nonisolated enum GitGardenError: Error, LocalizedError, Sendable {
         case .gitFailed(let message): return message
         case .api(let message): return message
         case .planMissing: return "Generate a dry-run plan before executing."
+        case .missingRepo: return "Pick an existing GitHub repo. GitGarden writes history, issues, and PRs into it and never creates a repository."
         case .cancelled: return "Cancelled."
         case .nukeBlocked(let message): return message
         }
+    }
+}
+
+nonisolated struct RepoRef: Sendable, Hashable {
+    var owner: String
+    var name: String
+
+    var fullName: String { "\(owner)/\(name)" }
+
+    static func parse(_ raw: String, defaultOwner: String) -> RepoRef? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let parts = trimmed
+            .replacingOccurrences(of: "https://github.com/", with: "")
+            .split(separator: "/")
+            .map(String.init)
+            .filter { !$0.isEmpty }
+        if parts.count >= 2 {
+            return RepoRef(owner: parts[parts.count - 2], name: parts[parts.count - 1].replacingOccurrences(of: ".git", with: ""))
+        }
+        let owner = defaultOwner.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !owner.isEmpty else { return nil }
+        return RepoRef(owner: owner, name: parts[0].replacingOccurrences(of: ".git", with: ""))
     }
 }
 

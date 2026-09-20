@@ -35,7 +35,7 @@ struct AccountsView: View {
                     }
                     .buttonStyle(.plain)
                 }
-                ScrollView(showsIndicators: false) {
+                ScrollView {
                     VStack(spacing: 8) {
                         ForEach(filtered) { account in
                             Button {
@@ -69,20 +69,25 @@ struct AccountsView: View {
             }
             .padding(18)
             .frame(width: 280)
+            .frame(maxHeight: .infinity, alignment: .top)
             .background(SKTheme.railColor(for: scheme))
             .overlay(alignment: .trailing) { Rectangle().fill(SKTheme.hairline).frame(width: 1) }
 
-            if let account = accounts.first(where: { $0.id == selected }) ?? filtered.first {
-                AccountDetailView(account: account, personas: personas)
-            } else {
-                VStack(spacing: 10) {
-                    Text("No operators yet")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                    SKPrimaryButton(title: "Add account") { showAdd = true }
+            Group {
+                if let account = accounts.first(where: { $0.id == selected }) ?? filtered.first {
+                    AccountDetailView(account: account, personas: personas)
+                } else {
+                    VStack(spacing: 10) {
+                        Text("No operators yet")
+                            .font(.system(size: 20, weight: .bold, design: .rounded))
+                        SKPrimaryButton(title: "Add account") { showAdd = true }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { if selected == nil { selected = accounts.first?.id } }
         .sheet(isPresented: $showAdd) {
             AddAccountSheet(personas: personas)
@@ -150,7 +155,7 @@ struct AccountDetailView: View {
                         ProgressView().controlSize(.small)
                     }
                 }
-                ContributionHistoryView(days: days, showsPlanned: false, cell: 11)
+                ContributionHistoryView(days: days, showsPlanned: false)
             }
 
             OrgListView(orgs: orgs)

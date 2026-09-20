@@ -89,8 +89,46 @@ nonisolated struct BackdatedCommitEngine: Sendable {
         }
     }
 
-    func checkoutMain(at url: URL) throws {
-        _ = try git.run(in: url, ["checkout", "main"], env: [:])
+    func checkoutMain(at url: URL, named name: String = "main") throws {
+        var seen = Set<String>()
+        let candidates = [name, "main", "master"].filter { seen.insert($0).inserted }
+        for branch in candidates {
+            if (try? git.run(in: url, ["rev-parse", "--verify", branch], env: [:])) != nil {
+                _ = try git.run(in: url, ["checkout", branch], env: [:])
+                return
+            }
+        }
+        _ = try git.run(in: url, ["checkout", "-B", name], env: [:])
+    }
+
+    func ensureExistingClone(at url: URL, owner: String, repo: String, token: String, gh: GitHubCLI) throws {
+        let gitDir = url.appendingPathComponent(".git")
+        if fileManager.fileExists(atPath: gitDir.path) {
+            try ensureRemote(at: url, owner: owner, repo: repo, token: token)
+            return
+        }
+        let parent = url.deletingLastPathComponent()
+        try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
+        if fileManager.fileExists(atPath: url.path) {
+            let items = (try? fileManager.contentsOfDirectory(atPath: url.path)) ?? []
+            if items.isEmpty {
+                try fileManager.removeItem(at: url)
+            } else {
+                throw GitGardenError.gitFailed("Worktree \(url.path) is not empty and is not a git clone of \(owner)/\(repo).")
+            }
+        }
+        do {
+            try gh.clone(owner: owner, repo: repo, to: url)
+        } catch {
+            try prepareWorktree(at: url)
+        }
+        if !fileManager.fileExists(atPath: gitDir.path) {
+            try prepareWorktree(at: url)
+        }
+        try ensureRemote(at: url, owner: owner, repo: repo, token: token)
+        if (try? git.run(in: url, ["rev-parse", "--verify", "HEAD"], env: [:])) == nil {
+            _ = try git.run(in: url, ["checkout", "-B", "main"], env: [:])
+        }
     }
 
     func ensureRemote(at url: URL, owner: String, repo: String, token: String) throws {
@@ -104,7 +142,7 @@ nonisolated struct BackdatedCommitEngine: Sendable {
     }
 
     func push(at url: URL, branch: String) throws {
-        _ = try git.run(in: url, ["push", "-u", "origin", branch], env: [:])
+        _ = try git.run(in: url, ["push", "-u", "origin", "HEAD:refs/heads/\(branch)"], env: [:])
     }
 
     func pullMain(at url: URL) throws {

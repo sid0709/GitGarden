@@ -7,9 +7,12 @@ struct QueueView: View {
     @Query(sort: \Job.orderIndex) private var jobs: [Job]
     @Query(sort: \Account.login) private var accounts: [Account]
     @State private var errorMessage: String?
+    @State private var page = 0
 
     private var filtered: [Job] {
-        let sorted = jobs.sorted { lhs, rhs in
+        let sorted = jobs
+            .filter { $0.kind != .createRepo }
+            .sorted { lhs, rhs in
             if lhs.scheduledAt != rhs.scheduledAt { return lhs.scheduledAt < rhs.scheduledAt }
             return lhs.orderIndex < rhs.orderIndex
         }
@@ -50,7 +53,9 @@ struct QueueView: View {
                         .foregroundStyle(SKTheme.mute)
                 }
             } else {
-                ForEach(Array(filtered.enumerated()), id: \.element.persistentModelID) { index, job in
+                let start = page * SKPaging.pageSize
+                ForEach(Array(SKPaging.slice(filtered, page: page).enumerated()), id: \.element.persistentModelID) { offset, job in
+                    let index = start + offset
                     HStack(alignment: .top, spacing: 14) {
                         VStack(spacing: 0) {
                             Circle()
@@ -65,7 +70,7 @@ struct QueueView: View {
                             }
                         }
                         .frame(width: 16)
-                        SKCard(padding: 14, rotateOnHover: job.status == .running) {
+                        SKCard(padding: 14, rotateOnHover: job.status == .running, lift: job.status == .running) {
                             HStack(alignment: .top) {
                                 VStack(alignment: .leading, spacing: 6) {
                                     Text(job.summary)
@@ -102,8 +107,9 @@ struct QueueView: View {
                             }
                         }
                     }
-                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                SKPagerBar(page: $page, total: filtered.count, noun: "jobs")
             }
         }
         .alert("Queue error", isPresented: Binding(
@@ -114,6 +120,13 @@ struct QueueView: View {
         } message: {
             Text(errorMessage ?? "")
         }
+        .onAppear { jumpToLiveJob() }
+        .onChange(of: nowIndex) { _, _ in jumpToLiveJob() }
+    }
+
+    private func jumpToLiveJob() {
+        guard let nowIndex else { return }
+        page = nowIndex / SKPaging.pageSize
     }
 }
 
@@ -122,7 +135,7 @@ extension Job {
         switch kind {
         case .createIssue, .commentIssue, .closeIssue: return .issue
         case .createPR, .reviewPR, .mergePR: return .pull
-        case .commit, .push, .createRepo, .createBranch, .createRelease: return .history
+        case .commit, .push, .createRepo, .createBranch, .createRelease, .growHistory: return .history
         case .follow, .star: return .social
         case .patchProfile: return .profile
         case .inviteCollaborator: return .ux
