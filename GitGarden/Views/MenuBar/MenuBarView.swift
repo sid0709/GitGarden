@@ -27,7 +27,11 @@ struct MenuBarView: View {
                         Text(campaign.name)
                             .font(.system(size: 13, weight: .medium, design: .rounded))
                         Spacer()
-                        SKTag(kind: .running)
+                        SKTag(kind: campaign.dryRun ? .dry : .running)
+                        Button("Pause") { runtime.pauseCampaign(campaign) }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .foregroundStyle(SKTheme.accent)
                     }
                 }
             }

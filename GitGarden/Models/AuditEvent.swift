@@ -50,16 +50,18 @@ final class CampaignSnapshot {
 
 @Model
 final class AppSettings {
-    var defaultDryRun: Bool
+    var defaultDryRun: Bool = false
     var throwawayPrefix: String
     var worktreePath: String
     var dripInterval: TimeInterval
+    var defaultHistoryYears: Int = 10
 
     init() {
-        self.defaultDryRun = true
+        self.defaultDryRun = false
         self.throwawayPrefix = "gitgarden-test-"
         self.worktreePath = ""
         self.dripInterval = 45
+        self.defaultHistoryYears = 10
     }
 
     var resolvedWorktreePath: URL {

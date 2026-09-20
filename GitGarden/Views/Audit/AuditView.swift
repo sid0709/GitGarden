@@ -15,17 +15,23 @@ struct AuditView: View {
     }
 
     var body: some View {
-        SKBoard {
-            SKKanbanColumn(title: "Calls", count: filtered.count) {
+        SKPage {
+            Text("Flight recorder")
+                .font(.system(size: 22, weight: .bold, design: .rounded))
+            if filtered.isEmpty {
+                SKCard {
+                    Text("No API calls yet")
+                        .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    Text("Validate a token or run a campaign. Tokens are redacted here.")
+                        .foregroundStyle(SKTheme.mute)
+                }
+            } else {
                 ForEach(filtered) { event in
-                    SKCard {
+                    SKCard(padding: 14) {
                         HStack {
                             Text(event.method)
                                 .font(.system(size: 12, weight: .bold, design: .rounded))
-                            SKTag(
-                                kind: event.statusCode >= 400 ? .failed : .ui,
-                                label: "\(event.statusCode)"
-                            )
+                            SKTag(kind: event.statusCode >= 400 ? .failed : .ui, label: "\(event.statusCode)")
                             Spacer()
                             Text(event.timestamp.formatted(date: .omitted, time: .standard))
                                 .font(.system(size: 11, design: .rounded))
@@ -45,13 +51,6 @@ struct AuditView: View {
                         }
                     }
                 }
-            }
-        }
-        .overlay {
-            if events.isEmpty {
-                Text("No API calls yet")
-                    .font(.system(size: 16, weight: .medium, design: .rounded))
-                    .foregroundStyle(SKTheme.mute)
             }
         }
     }

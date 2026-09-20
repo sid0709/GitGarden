@@ -56,16 +56,16 @@ final class Campaign {
         self.includeIssues = true
         self.includeProfile = false
         self.includeSocial = false
-        self.dryRun = true
+        self.dryRun = false
         self.dripMode = false
         self.dripInterval = 45
         self.throwawayRepo = true
         let now = Date()
         self.endDate = now
-        self.startDate = Calendar.current.date(byAdding: .year, value: -2, to: now) ?? now
-        self.commitCount = 80
-        self.prCount = 6
-        self.issueCount = 8
+        self.startDate = Calendar.current.date(byAdding: .year, value: -10, to: now) ?? now
+        self.commitCount = 400
+        self.prCount = 30
+        self.issueCount = 40
         self.repoName = ""
         self.repoDescription = ""
         self.language = "rust"
@@ -108,13 +108,44 @@ final class Campaign {
     }
 
     var defaultRepoName: String {
+        resolvedRepoName(prefix: "gitgarden-test-")
+    }
+
+    func resolvedRepoName(prefix: String) -> String {
         if !repoName.isEmpty { return repoName }
         let slug = name
             .lowercased()
             .replacingOccurrences(of: " ", with: "-")
             .filter { $0.isLetter || $0.isNumber || $0 == "-" }
-        let prefix = throwawayRepo ? "gitgarden-test-" : ""
-        return prefix + (slug.isEmpty ? "garden" : slug)
+        return (throwawayRepo ? prefix : "") + (slug.isEmpty ? "garden" : slug)
+    }
+
+    var progress: Double {
+        guard !jobs.isEmpty else { return 0 }
+        let done = jobs.filter { $0.status == .completed || $0.status == .skipped }.count
+        return Double(done) / Double(jobs.count)
+    }
+
+    var historyYears: Int {
+        let years = Calendar.current.dateComponents([.year], from: startDate, to: endDate).year ?? 10
+        return min(20, max(1, years == 0 ? 1 : years))
+    }
+
+    func setHistoryYears(_ years: Int) {
+        let clamped = min(20, max(1, years))
+        startDate = Calendar.current.date(byAdding: .year, value: -clamped, to: endDate) ?? startDate
+    }
+
+    static func suggestedCommitCount(forYears years: Int) -> Int {
+        min(2500, max(8, years * 40))
+    }
+
+    static func suggestedPRCount(forYears years: Int) -> Int {
+        min(120, max(0, years * 3))
+    }
+
+    static func suggestedIssueCount(forYears years: Int) -> Int {
+        min(160, max(0, years * 4))
     }
 }
 

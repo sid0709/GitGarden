@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import SwiftData
 @testable import GitGarden
 
 struct GitGardenTests {
@@ -165,5 +166,101 @@ struct GitGardenTests {
         let days = HeatmapBuilder.build(dates: [d1, d2, d3])
         #expect(days.first { $0.date == "2024-01-02" }?.planned == 2)
         #expect(days.first { $0.date == "2024-01-03" }?.planned == 1)
+    }
+
+    @Test func githubUserDecodesProfileFields() throws {
+        let json = """
+        {
+          "login": "omnimu",
+          "id": 42,
+          "name": "Omni",
+          "email": "a@x.com",
+          "avatar_url": "https://example.com/a.png",
+          "html_url": "https://github.com/omnimu",
+          "bio": "hello",
+          "company": "@acme",
+          "location": "Chicago",
+          "blog": "https://example.com",
+          "twitter_username": "omni",
+          "followers": 3,
+          "following": 9,
+          "public_repos": 12,
+          "public_gists": 1,
+          "total_private_repos": 4,
+          "created_at": "2019-03-14T12:00:00Z",
+          "updated_at": "2026-09-20T01:00:00Z",
+          "two_factor_authentication": true,
+          "plan": { "name": "free", "space": 1, "private_repos": 10000, "collaborators": 0 }
+        }
+        """.data(using: .utf8)!
+        let user = try JSONDecoder().decode(GitHubUser.self, from: json)
+        #expect(user.login == "omnimu")
+        #expect(user.followers == 3)
+        #expect(user.plan?.name == "free")
+        #expect(GitHubDate.parse(user.createdAt) != nil)
+    }
+
+    @Test func contributionYearsCoverFullHistory() {
+        let start = GitHubDate.parse("2019-03-14T00:00:00Z")!
+        let end = GitHubDate.parse("2021-08-01T00:00:00Z")!
+        let windows = GitHubDate.yearWindows(from: start, to: end)
+        #expect(windows.count == 3)
+        #expect(Calendar(identifier: .gregorian).component(.year, from: windows[0].from) == 2019)
+        #expect(Calendar(identifier: .gregorian).component(.year, from: windows[2].to) == 2021)
+        let days = [
+            HeatmapDay(date: "2019-03-14", existing: 2, planned: 0),
+            HeatmapDay(date: "2021-01-02", existing: 5, planned: 0)
+        ]
+        let groups = HeatmapYears.groups(from: days)
+        #expect(groups.map(\.year) == [2021, 2019])
+        #expect(groups.first?.total == 5)
+    }
+
+    @Test @MainActor func tenYearHistoryPresetsScale() {
+        #expect(Campaign.suggestedCommitCount(forYears: 10) == 400)
+        #expect(Campaign.suggestedPRCount(forYears: 10) == 30)
+        #expect(Campaign.suggestedIssueCount(forYears: 10) == 40)
+        let campaign = Campaign(name: "decade")
+        campaign.endDate = Date(timeIntervalSince1970: 1_800_000_000)
+        campaign.setHistoryYears(10)
+        #expect(campaign.historyYears == 10)
+        campaign.setHistoryYears(3)
+        #expect(campaign.historyYears == 3)
+    }
+
+    @Test @MainActor func campaignPlanSkipAndDryRunControls() throws {
+        let schema = Schema([
+            Account.self, PersonaRecord.self, Campaign.self, Job.self,
+            CreatedResource.self, AuditEvent.self, CampaignSnapshot.self, AppSettings.self
+        ])
+        let container = try ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let runtime = GardenRuntime(modelContainer: container)
+        runtime.seedDefaults()
+        let account = Account(login: "alice", name: "Alice", email: "a@x.com", token: "test")
+        container.mainContext.insert(account)
+        let campaign = Campaign(name: "dry then live", owner: account)
+        campaign.includeHistory = true
+        campaign.includePRs = false
+        campaign.includeIssues = false
+        campaign.includeProfile = false
+        campaign.includeSocial = false
+        campaign.commitCount = 3
+        container.mainContext.insert(campaign)
+        try runtime.generatePlan(for: campaign)
+        #expect(!campaign.jobs.isEmpty)
+        #expect(campaign.status == .planned)
+        let first = campaign.jobs.sorted(by: { $0.orderIndex < $1.orderIndex }).first!
+        runtime.skipJob(first)
+        #expect(first.status == .skipped)
+        try runtime.startCampaign(campaign, live: false)
+        #expect(campaign.dryRun)
+        #expect(campaign.status == .running)
+        runtime.pauseCampaign(campaign)
+        #expect(campaign.status == .paused)
+        for job in campaign.jobs { job.status = .completed }
+        try runtime.startCampaign(campaign, live: true)
+        runtime.pauseCampaign(campaign)
+        #expect(!campaign.dryRun)
+        #expect(campaign.jobs.contains { $0.status == .pending })
     }
 }

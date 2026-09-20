@@ -89,57 +89,92 @@ struct SKTopBar: View {
     }
 }
 
-struct SKColumnHeader: View {
-    var title: String
-    var count: Int
-
-    var body: some View {
-        HStack {
-            Text(title)
-                .font(.system(size: 14, weight: .medium, design: .rounded))
-                .foregroundStyle(SKTheme.mute)
-            Text("\(count)")
-                .font(.system(size: 13, weight: .medium, design: .rounded))
-                .foregroundStyle(SKTheme.mute.opacity(0.7))
-            Spacer()
-            Image(systemName: "ellipsis")
-                .foregroundStyle(SKTheme.mute.opacity(0.6))
-                .font(.system(size: 12, weight: .semibold))
-        }
-        .padding(.horizontal, 4)
-    }
-}
-
-struct SKKanbanColumn<Content: View>: View {
-    var title: String
-    var count: Int
+struct SKPage<Content: View>: View {
+    var spacing: CGFloat = 22
     @ViewBuilder var content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            SKColumnHeader(title: title, count: count)
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: 12) {
-                    content
-                }
-                .padding(.bottom, 24)
-            }
-        }
-        .frame(minWidth: 260, maxWidth: 340, alignment: .top)
-    }
-}
-
-struct SKBoard<Content: View>: View {
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(alignment: .top, spacing: 28) {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: spacing) {
                 content
             }
             .padding(.horizontal, 28)
-            .padding(.top, 8)
-            .padding(.bottom, 20)
+            .padding(.top, 6)
+            .padding(.bottom, 32)
+            .frame(maxWidth: 1180, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+struct SKMetricChip: View {
+    var title: String
+    var value: String
+    var kind: SKTagKind
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title.uppercased())
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .foregroundStyle(SKTheme.mute)
+            Text(value)
+                .font(.system(size: 26, weight: .bold, design: .rounded))
+            SKTag(kind: kind)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(SKTheme.cardColor(for: scheme), in: RoundedRectangle(cornerRadius: SKTheme.radiusCard, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: SKTheme.radiusCard, style: .continuous)
+                .stroke(SKTheme.hairline, lineWidth: 1)
+        }
+    }
+}
+
+struct SKFilmRow<Content: View>: View {
+    var selected: Bool
+    @ViewBuilder var content: Content
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        content
+            .padding(12)
+            .background(
+                SKTheme.cardColor(for: scheme),
+                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(selected ? SKTheme.accent : SKTheme.hairline, lineWidth: selected ? 1.5 : 1)
+            }
+    }
+}
+
+struct SKRateBar: View {
+    var remaining: Int
+    var limit: Int
+
+    var body: some View {
+        let fraction = limit == 0 ? 0 : min(1, Double(remaining) / Double(limit))
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Rate limit")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(SKTheme.mute)
+                Spacer()
+                Text("\(remaining) / \(limit)")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded).monospacedDigit())
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(SKTheme.hairline)
+                    Capsule()
+                        .fill(fraction < 0.12 ? SKTheme.coral : SKTheme.accent)
+                        .frame(width: max(8, geo.size.width * fraction))
+                }
+            }
+            .frame(height: 7)
         }
     }
 }

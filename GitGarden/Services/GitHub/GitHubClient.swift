@@ -30,22 +30,17 @@ actor GitHubClient: GitHubServicing {
         return (user, scopes, lastRateLimit)
     }
 
-    func fetchRateLimit() async throws -> RateLimit {
-        let (payload, _): (GitHubRateLimitPayload, HTTPURLResponse) = try await request(method: "GET", path: "/rate_limit")
-        let core = payload.resources.core
-        lastRateLimit = RateLimit(
-            remaining: core.remaining,
-            limit: core.limit,
-            reset: Date(timeIntervalSince1970: TimeInterval(core.reset)),
-            retryAfter: nil,
-            resource: "core"
-        )
-        return lastRateLimit
-    }
-
     func fetchEmails() async throws -> [GitHubEmail] {
         let (emails, _): ([GitHubEmail], HTTPURLResponse) = try await request(method: "GET", path: "/user/emails")
         return emails
+    }
+
+    func fetchRepos() async throws -> [GitHubRepo] {
+        try await fetchPaged("/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member")
+    }
+
+    func fetchOrgs() async throws -> [GitHubOrg] {
+        try await fetchPaged("/user/orgs?per_page=100")
     }
 
     func fetchContributionCalendar(login: String, from: Date, to: Date) async throws -> [HeatmapDay] {
@@ -54,6 +49,7 @@ actor GitHubClient: GitHubServicing {
         let query = """
         query($login:String!, $from:DateTime!, $to:DateTime!) {
           user(login:$login) {
+            createdAt
             contributionsCollection(from:$from, to:$to) {
               contributionCalendar {
                 weeks { contributionDays { date contributionCount } }
@@ -87,6 +83,44 @@ actor GitHubClient: GitHubServicing {
         let days = envelope.data?.user?.contributionsCollection.contributionCalendar.weeks
             .flatMap(\.contributionDays) ?? []
         return days.map { HeatmapDay(date: $0.date, existing: $0.contributionCount, planned: 0) }
+    }
+
+    func fetchContributionHistory(login: String, from: Date, to: Date) async throws -> [HeatmapDay] {
+        var merged: [String: HeatmapDay] = [:]
+        for window in GitHubDate.yearWindows(from: from, to: to) {
+            let chunk = try await fetchContributionCalendar(login: login, from: window.from, to: window.to)
+            for day in chunk {
+                merged[day.date] = day
+            }
+        }
+        return merged.values.sorted { $0.date < $1.date }
+    }
+
+    private func fetchPaged<T: Decodable>(_ path: String) async throws -> [T] {
+        var items: [T] = []
+        for page in 1...20 {
+            let separator = path.contains("?") ? "&" : "?"
+            let (batch, _): ([T], HTTPURLResponse) = try await request(
+                method: "GET",
+                path: "\(path)\(separator)page=\(page)"
+            )
+            items.append(contentsOf: batch)
+            if batch.count < 100 { break }
+        }
+        return items
+    }
+
+    func fetchRateLimit() async throws -> RateLimit {
+        let (payload, _): (GitHubRateLimitPayload, HTTPURLResponse) = try await request(method: "GET", path: "/rate_limit")
+        let core = payload.resources.core
+        lastRateLimit = RateLimit(
+            remaining: core.remaining,
+            limit: core.limit,
+            reset: Date(timeIntervalSince1970: TimeInterval(core.reset)),
+            retryAfter: nil,
+            resource: "core"
+        )
+        return lastRateLimit
     }
 
     func createRepo(name: String, description: String, isPrivate: Bool) async throws -> GitHubRepo {

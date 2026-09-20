@@ -11,6 +11,10 @@ final class GardenRuntime {
     private var background: NSBackgroundActivityScheduler?
     var lastTick: Date = .distantPast
     var nextFire: Date?
+    var heatmaps: [String: [HeatmapDay]] = [:]
+    var repositories: [String: [GitHubRepo]] = [:]
+    var organizations: [String: [GitHubOrg]] = [:]
+    var heatmapLoading: Set<String> = []
 
     init(modelContainer: ModelContainer) {
         self.modelContainer = modelContainer
@@ -61,7 +65,10 @@ final class GardenRuntime {
 
     func seedDefaults() {
         let settings = settings()
-        _ = settings
+        if settings.defaultHistoryYears < 1 {
+            settings.defaultHistoryYears = 10
+            settings.defaultDryRun = false
+        }
         let existing = (try? context.fetch(FetchDescriptor<PersonaRecord>())) ?? []
         let ids = Set(existing.map(\.personaID))
         for item in PersonaCatalog.bundledYAML where !ids.contains(item.id) {
@@ -98,9 +105,7 @@ final class GardenRuntime {
     func validate(account: Account) async throws {
         let client = client(for: account)
         let result = try await client.validateToken()
-        account.login = result.user.login
-        account.name = result.user.name ?? ""
-        account.avatarURL = result.user.avatarUrl
+        account.apply(user: result.user)
         account.scopes = result.scopes
         account.rateLimitRemaining = result.rateLimit.remaining
         account.rateLimitLimit = result.rateLimit.limit
@@ -131,12 +136,13 @@ final class GardenRuntime {
             existing.scopes = result.scopes
             clients[existing.login] = GitHubClient(token: trimmed, loginHint: existing.login)
             try await validate(account: existing)
+            await loadHeatmap(for: existing)
             return existing
         }
         let account = Account(
             login: result.user.login,
             name: result.user.name ?? "",
-            avatarURL: result.user.avatarUrl,
+            avatarURL: result.user.avatarUrl ?? "",
             token: trimmed,
             scopes: result.scopes,
             rateLimitRemaining: result.rateLimit.remaining,
@@ -147,18 +153,25 @@ final class GardenRuntime {
         context.insert(account)
         clients[account.login] = GitHubClient(token: trimmed, loginHint: account.login)
         try await validate(account: account)
+        await loadHeatmap(for: account)
         return account
     }
 
     func generatePlan(for campaign: Campaign) throws {
         guard let owner = campaign.owner else { throw GitGardenError.missingAccount }
+        if campaign.status == .running {
+            pauseCampaign(campaign)
+        }
+        if campaign.repoName.isEmpty {
+            campaign.repoName = campaign.resolvedRepoName(prefix: settings().throwawayPrefix)
+        }
         let persona = persona(for: campaign.personaID)
         let input = PlannerInput(
             ownerLogin: owner.login,
             ownerName: owner.name,
             ownerEmail: owner.email.isEmpty ? "\(owner.login)@users.noreply.github.com" : owner.email,
             collaboratorLogin: campaign.collaborator?.login,
-            repoName: campaign.defaultRepoName,
+            repoName: campaign.repoName,
             repoDescription: campaign.repoDescription.isEmpty ? campaign.name : campaign.repoDescription,
             start: campaign.startDate,
             end: campaign.endDate,
@@ -177,7 +190,6 @@ final class GardenRuntime {
             language: campaign.language
         )
         let plan = Planner().build(input)
-        campaign.repoName = campaign.defaultRepoName
         campaign.plan = plan
         campaign.status = .planned
         campaign.updatedAt = Date()
@@ -203,19 +215,141 @@ final class GardenRuntime {
         return warnings
     }
 
-    func startCampaign(_ campaign: Campaign) throws {
+    func startCampaign(_ campaign: Campaign, live: Bool) throws {
         guard campaign.plan != nil else { throw GitGardenError.planMissing }
+        if campaign.status == .running {
+            for login in campaign.involvedLogins {
+                accountTasks[login]?.cancel()
+                accountTasks[login] = nil
+                runningLogins.remove(login)
+            }
+        }
         try ConflictGuard.assertCanRun(campaign, context: context, runningLogins: runningLogins)
         if campaign.jobs.isEmpty {
             try generatePlan(for: campaign)
         }
-        snapshot(campaign, phase: "before")
-        campaign.dryRun = false
+        let switchingToLive = live && campaign.dryRun
+        let replay = campaign.jobs.allSatisfy {
+            $0.status == .completed || $0.status == .skipped || $0.status == .failed || $0.status == .cancelled
+        }
+        if switchingToLive || replay {
+            for job in campaign.jobs {
+                job.status = .pending
+                job.lastError = ""
+                job.attempt = 0
+                job.completedAt = nil
+            }
+        } else {
+            for job in campaign.jobs where job.status == .failed || job.status == .cancelled {
+                job.status = .pending
+                job.lastError = ""
+            }
+        }
+        snapshot(campaign, phase: live ? "before" : "before-dry")
+        campaign.dryRun = !live
         campaign.status = .running
         campaign.lastError = ""
         campaign.updatedAt = Date()
         try context.save()
         processDueJobs()
+    }
+
+    func retryJob(_ job: Job) throws {
+        guard let campaign = job.campaign else { return }
+        try ConflictGuard.assertCanRun(campaign, context: context, runningLogins: runningLogins)
+        job.status = .pending
+        job.lastError = ""
+        job.attempt = 0
+        campaign.status = .running
+        campaign.lastError = ""
+        try context.save()
+        processDueJobs()
+    }
+
+    func skipJob(_ job: Job) {
+        job.status = .skipped
+        job.completedAt = Date()
+        try? context.save()
+        processDueJobs()
+    }
+
+    func retryCampaign(_ campaign: Campaign) throws {
+        try ConflictGuard.assertCanRun(campaign, context: context, runningLogins: runningLogins)
+        for job in campaign.jobs where job.status == .failed || job.status == .cancelled {
+            job.status = .pending
+            job.lastError = ""
+        }
+        campaign.status = .running
+        campaign.lastError = ""
+        try context.save()
+        processDueJobs()
+    }
+
+    func deleteCampaign(_ campaign: Campaign) {
+        pauseCampaign(campaign)
+        context.delete(campaign)
+        try? context.save()
+    }
+
+    func deleteAccount(_ account: Account) throws {
+        let running = account.ownedCampaigns.contains { $0.status == .running } || account.collabCampaigns.contains { $0.status == .running }
+        if running {
+            throw GitGardenError.conflict("Pause running campaigns before removing @\(account.login).")
+        }
+        clients[account.login] = nil
+        heatmaps[account.login] = nil
+        repositories[account.login] = nil
+        organizations[account.login] = nil
+        context.delete(account)
+        try context.save()
+    }
+
+    func validateAllAccounts() async {
+        let accounts = (try? context.fetch(FetchDescriptor<Account>())) ?? []
+        for account in accounts where !account.token.isEmpty {
+            try? await validate(account: account)
+            await loadHeatmap(for: account)
+        }
+    }
+
+    func loadHeatmap(for account: Account) async {
+        heatmapLoading.insert(account.login)
+        defer { heatmapLoading.remove(account.login) }
+        if heatmaps[account.login] == nil, !account.cachedHeatmap.isEmpty {
+            heatmaps[account.login] = account.cachedHeatmap
+        }
+        if repositories[account.login] == nil, !account.cachedRepos.isEmpty {
+            repositories[account.login] = account.cachedRepos
+        }
+        if organizations[account.login] == nil, !account.cachedOrgs.isEmpty {
+            organizations[account.login] = account.cachedOrgs
+        }
+        let githubLaunch = GitHubDate.parse("2008-04-01T00:00:00Z") ?? Date(timeIntervalSince1970: 1_207_008_000)
+        let to = Date()
+        let from = account.githubCreatedAt ?? githubLaunch
+        let client = client(for: account)
+        async let history = client.fetchContributionHistory(login: account.login, from: from, to: to)
+        async let repoList = client.fetchRepos()
+        async let orgList = client.fetchOrgs()
+        if let days = try? await history, !days.isEmpty {
+            heatmaps[account.login] = days
+            account.cachedHeatmap = days
+        }
+        if let repos = try? await repoList {
+            repositories[account.login] = repos
+            account.cachedRepos = repos
+            if account.publicRepos == 0 && account.totalPrivateRepos == 0 {
+                account.publicRepos = repos.filter { !$0.private }.count
+                account.totalPrivateRepos = repos.filter { $0.private }.count
+            }
+        }
+        if let orgs = try? await orgList {
+            organizations[account.login] = orgs
+            account.cachedOrgs = orgs
+        }
+        account.rateLimitRemaining = await client.lastRateLimit.remaining
+        account.rateLimitLimit = max(account.rateLimitLimit, await client.lastRateLimit.limit)
+        try? context.save()
     }
 
     func pauseCampaign(_ campaign: Campaign) {
@@ -315,6 +449,18 @@ final class GardenRuntime {
     private func execute(job: Job) async throws {
         guard let campaign = job.campaign else { throw GitGardenError.planMissing }
         guard let account = account(named: job.accountLogin) else { throw GitGardenError.missingAccount }
+        if campaign.dryRun {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            audit(
+                account: account.login,
+                method: job.kind == .commit || job.kind == .push || job.kind == .createBranch ? "GIT" : "DRY",
+                path: job.kind.title,
+                status: 0,
+                campaign: campaign.name,
+                message: "simulated \(job.summary)"
+            )
+            return
+        }
         let client = client(for: account)
         let payload = job.payload
         let owner = payload.owner ?? campaign.owner?.login ?? account.login
