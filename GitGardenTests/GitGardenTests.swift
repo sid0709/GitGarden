@@ -171,6 +171,14 @@ struct GitGardenTests {
         #expect(result.state.files["src/parser.rs"] != nil)
     }
 
+    @Test func personaYAMLMintsUniqueIdentity() {
+        #expect(PersonaYAML.uniqueName("Custom", existing: ["Custom", "Custom 2"]) == "Custom 3")
+        #expect(PersonaYAML.uniqueID("rustacean-copy", existing: ["rustacean", "rustacean-copy"]) == "rustacean-copy-2")
+        let patched = PersonaYAML.replacingIdentity(PersonaCatalog.rustaceanYAML, id: "night-owl", name: "Night Owl")
+        #expect(patched.contains("id: night-owl"))
+        #expect(patched.contains("name: Night Owl"))
+    }
+
     @Test func yamlPersonaParse() throws {
         let value = try SimpleYAML.parse(PersonaCatalog.rustaceanYAML)
         let persona = Persona.from(yaml: value)
@@ -422,5 +430,59 @@ struct GitGardenTests {
         } catch GitGardenError.missingRepo {
             // expected
         }
+    }
+
+    @Test @MainActor func personasCanBeCreatedDuplicatedAndDeleted() throws {
+        let schema = Schema([
+            Account.self, PersonaRecord.self, Campaign.self, Job.self,
+            CreatedResource.self, AuditEvent.self, CampaignSnapshot.self, AppSettings.self
+        ])
+        let container = try ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let runtime = GardenRuntime(modelContainer: container)
+        runtime.seedDefaults()
+        let bundled = try container.mainContext.fetch(FetchDescriptor<PersonaRecord>())
+        #expect(bundled.count == 3)
+        let rustacean = try #require(bundled.first(where: { $0.personaID == "rustacean" }))
+        let copy = runtime.createPersona(copying: rustacean)
+        #expect(!copy.isBundled)
+        #expect(copy.personaID == "rustacean-copy")
+        #expect(copy.name == "Rustacean copy")
+        copy.name = "Night Owl"
+        try runtime.savePersona(copy, yaml: PersonaYAML.replacingIdentity(copy.yamlBody, id: "night-owl", name: "Night Owl"))
+        #expect(copy.personaID == "night-owl")
+        #expect(copy.name == "Night Owl")
+        #expect(copy.yamlBody.contains("id: night-owl"))
+        let account = Account(login: "alice", name: "Alice", email: "a@x.com", token: "test", personaID: copy.personaID)
+        container.mainContext.insert(account)
+        runtime.deletePersona(copy)
+        let leftover = try container.mainContext.fetch(FetchDescriptor<PersonaRecord>())
+        #expect(!leftover.contains { $0.personaID == "night-owl" })
+        #expect(account.personaID != "night-owl")
+        runtime.deletePersona(rustacean)
+        runtime.seedDefaults()
+        let afterDelete = try container.mainContext.fetch(FetchDescriptor<PersonaRecord>())
+        #expect(!afterDelete.contains { $0.personaID == "rustacean" })
+        runtime.restoreBundledPersonas()
+        let restored = try container.mainContext.fetch(FetchDescriptor<PersonaRecord>())
+        #expect(restored.contains { $0.personaID == "rustacean" })
+    }
+
+    @Test @MainActor func auditEventsCanBeDismissed() throws {
+        let schema = Schema([
+            Account.self, PersonaRecord.self, Campaign.self, Job.self,
+            CreatedResource.self, AuditEvent.self, CampaignSnapshot.self, AppSettings.self
+        ])
+        let container = try ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let runtime = GardenRuntime(modelContainer: container)
+        let keep = AuditEvent(accountLogin: "alice", method: "GIT", path: "push", statusCode: 0, message: "main")
+        let drop = AuditEvent(accountLogin: "alice", method: "POST", path: "/graphql", statusCode: 500)
+        container.mainContext.insert(keep)
+        container.mainContext.insert(drop)
+        runtime.dismissAudit(drop)
+        var events = try container.mainContext.fetch(FetchDescriptor<AuditEvent>())
+        #expect(events.map(\.path) == ["push"])
+        runtime.clearAudit()
+        events = try container.mainContext.fetch(FetchDescriptor<AuditEvent>())
+        #expect(events.isEmpty)
     }
 }

@@ -116,11 +116,9 @@ struct RepoListView: View {
                     .foregroundStyle(SKTheme.mute)
             }
             if filtered.isEmpty {
-                SKCard(lift: false) {
-                    Text("No repositories visible to this token")
-                        .font(.system(size: 13, design: .rounded))
-                        .foregroundStyle(SKTheme.mute)
-                }
+                Text("No repositories visible to this token")
+                    .font(.system(size: 13, design: .rounded))
+                    .foregroundStyle(SKTheme.mute)
             } else {
                 ForEach(visible, id: \.id) { repo in
                     Button {

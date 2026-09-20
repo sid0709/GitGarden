@@ -137,18 +137,18 @@ struct SKMetricChip: View {
 struct SKFilmRow<Content: View>: View {
     var selected: Bool
     @ViewBuilder var content: Content
-    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         content
             .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                SKTheme.cardColor(for: scheme),
+                selected ? SKTheme.accentSoft : Color.clear,
                 in: RoundedRectangle(cornerRadius: 14, style: .continuous)
             )
             .overlay {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(selected ? SKTheme.accent : SKTheme.hairline, lineWidth: selected ? 1.5 : 1)
+                    .stroke(selected ? SKTheme.accent : Color.clear, lineWidth: selected ? 1.5 : 0)
             }
     }
 }

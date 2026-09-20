@@ -30,9 +30,10 @@ struct CampaignDetailView: View {
             }
 
             if !runtime.missingScopeWarnings(for: campaign).isEmpty {
-                SKCard {
+                VStack(alignment: .leading, spacing: 6) {
                     Text("Scope warnings")
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(SKTheme.mute)
                     ForEach(runtime.missingScopeWarnings(for: campaign), id: \.self) { warning in
                         Text(warning)
                             .font(.system(size: 12, design: .rounded))
@@ -42,54 +43,52 @@ struct CampaignDetailView: View {
             }
 
             if let plan = campaign.plan {
-                SKCard(padding: 20) {
-                    HStack {
-                        Text("Season preview")
-                            .font(.system(size: 14, weight: .semibold, design: .rounded))
-                        Spacer()
-                        Text("\(campaign.historyYears) years · \(Int(campaign.progress * 100))% grown")
-                            .font(.system(size: 12, design: .rounded))
-                            .foregroundStyle(SKTheme.mute)
-                    }
-                    Stepper(
-                        campaign.kind == .history
-                            ? "Backdated history: \(campaign.historyYears) years"
-                            : campaign.kind == .issues
-                                ? "Issues: \(campaign.issueCount)"
-                                : "Pull requests: \(campaign.prCount)",
-                        value: Binding(
-                            get: {
-                                switch campaign.kind {
-                                case .history: return campaign.historyYears
-                                case .issues: return campaign.issueCount
-                                case .pullRequests: return campaign.prCount
-                                }
-                            },
-                            set: { value in
-                                switch campaign.kind {
-                                case .history:
-                                    campaign.setHistoryYears(value)
-                                    campaign.commitCount = Campaign.suggestedCommitCount(forYears: value)
-                                case .issues:
-                                    campaign.issueCount = min(160, max(1, value))
-                                case .pullRequests:
-                                    campaign.prCount = min(120, max(1, value))
-                                }
-                                do { try runtime.generatePlan(for: campaign) }
-                                catch { errorMessage = error.localizedDescription }
+                HStack {
+                    Text("Season preview")
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    Spacer()
+                    Text("\(campaign.historyYears) years · \(Int(campaign.progress * 100))% grown")
+                        .font(.system(size: 12, design: .rounded))
+                        .foregroundStyle(SKTheme.mute)
+                }
+                Stepper(
+                    campaign.kind == .history
+                        ? "Backdated history: \(campaign.historyYears) years"
+                        : campaign.kind == .issues
+                            ? "Issues: \(campaign.issueCount)"
+                            : "Pull requests: \(campaign.prCount)",
+                    value: Binding(
+                        get: {
+                            switch campaign.kind {
+                            case .history: return campaign.historyYears
+                            case .issues: return campaign.issueCount
+                            case .pullRequests: return campaign.prCount
                             }
-                        ),
-                        in: 1...20
-                    )
-                    ContributionHistoryView(days: plan.heatmap, showsPlanned: true)
-                    ProgressView(value: campaign.progress)
-                        .tint(SKTheme.accent)
-                    HStack {
-                        metric("Commits", plan.summary.commitCount)
-                        metric("PRs", plan.summary.prCount)
-                        metric("Issues", plan.summary.issueCount)
-                        metric("API", plan.summary.estimatedAPICalls)
-                    }
+                        },
+                        set: { value in
+                            switch campaign.kind {
+                            case .history:
+                                campaign.setHistoryYears(value)
+                                campaign.commitCount = Campaign.suggestedCommitCount(forYears: value)
+                            case .issues:
+                                campaign.issueCount = min(160, max(1, value))
+                            case .pullRequests:
+                                campaign.prCount = min(120, max(1, value))
+                            }
+                            do { try runtime.generatePlan(for: campaign) }
+                            catch { errorMessage = error.localizedDescription }
+                        }
+                    ),
+                    in: 1...20
+                )
+                ContributionHistoryView(days: plan.heatmap, showsPlanned: true)
+                ProgressView(value: campaign.progress)
+                    .tint(SKTheme.accent)
+                HStack {
+                    metric("Commits", plan.summary.commitCount)
+                    metric("PRs", plan.summary.prCount)
+                    metric("Issues", plan.summary.issueCount)
+                    metric("API", plan.summary.estimatedAPICalls)
                 }
             }
 
@@ -142,24 +141,23 @@ struct CampaignDetailView: View {
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .foregroundStyle(SKTheme.mute)
                 ForEach(SKPaging.slice(campaign.resources, page: resourcePage)) { resource in
-                    SKCard(padding: 12) {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(resource.label)
-                                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                                Text(resource.kind.rawValue)
-                                    .font(.system(size: 11, design: .rounded))
-                                    .foregroundStyle(SKTheme.mute)
-                            }
-                            Spacer()
-                            if let url = URL(string: resource.url), !resource.url.isEmpty {
-                                Button("Open") { NSWorkspace.shared.open(url) }
-                                    .buttonStyle(.plain)
-                                    .foregroundStyle(SKTheme.accent)
-                                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                            }
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(resource.label)
+                                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            Text(resource.kind.rawValue)
+                                .font(.system(size: 11, design: .rounded))
+                                .foregroundStyle(SKTheme.mute)
+                        }
+                        Spacer()
+                        if let url = URL(string: resource.url), !resource.url.isEmpty {
+                            Button("Open") { NSWorkspace.shared.open(url) }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(SKTheme.accent)
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
                         }
                     }
+                    .padding(.vertical, 6)
                 }
                 SKPagerBar(page: $resourcePage, total: campaign.resources.count, noun: "artifacts")
             }
@@ -179,30 +177,26 @@ struct CampaignDetailView: View {
                             .frame(width: 2)
                     }
                     .frame(width: 12)
-                    SKCard(padding: 12, lift: false) {
-                        HStack(alignment: .top) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(job.summary)
-                                    .font(.system(size: 13, weight: .medium, design: .rounded))
-                                Text("\(job.accountLogin) · \(job.kind.title) · \(job.scheduledAt.formatted(date: .abbreviated, time: .shortened))")
-                                    .font(.system(size: 11, design: .rounded))
-                                    .foregroundStyle(SKTheme.mute)
-                                if !job.lastError.isEmpty {
-                                    Text(job.lastError)
-                                        .font(.system(size: 11, design: .rounded))
-                                        .foregroundStyle(SKTheme.coral)
-                                }
-                            }
-                            Spacer()
-                            if job.status == .failed {
-                                SKQuietButton(title: "Retry") {
-                                    do { try runtime.retryJob(job) }
-                                    catch { errorMessage = error.localizedDescription }
-                                }
-                            } else if job.status == .pending {
-                                SKQuietButton(title: "Skip") { runtime.skipJob(job) }
-                            }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(job.summary)
+                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                        Text("\(job.accountLogin) · \(job.kind.title) · \(job.scheduledAt.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.system(size: 11, design: .rounded))
+                            .foregroundStyle(SKTheme.mute)
+                        if !job.lastError.isEmpty {
+                            Text(job.lastError)
+                                .font(.system(size: 11, design: .rounded))
+                                .foregroundStyle(SKTheme.coral)
                         }
+                    }
+                    Spacer()
+                    if job.status == .failed {
+                        SKQuietButton(title: "Retry") {
+                            do { try runtime.retryJob(job) }
+                            catch { errorMessage = error.localizedDescription }
+                        }
+                    } else if job.status == .pending {
+                        SKQuietButton(title: "Skip") { runtime.skipJob(job) }
                     }
                 }
             }
@@ -243,6 +237,7 @@ struct CampaignDetailView: View {
         switch campaign.status {
         case .running: return .running
         case .failed: return .failed
+        case .completed: return .completed
         case .planned, .draft, .paused: return .pending
         default: return .ui
         }

@@ -2,33 +2,20 @@ import SwiftUI
 
 struct SKCard<Content: View>: View {
     var padding: CGFloat = 16
-    var rotateOnHover: Bool = false
-    var lift: Bool = true
+    var spacing: CGFloat = 12
     @ViewBuilder var content: Content
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        content
-            .padding(padding)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(SKTheme.cardColor(for: scheme), in: RoundedRectangle(cornerRadius: SKTheme.radiusCard, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: SKTheme.radiusCard, style: .continuous)
-                    .stroke(SKTheme.hairline, lineWidth: 1)
-            }
-            .modifier(ConditionalLift(enabled: lift, rotate: rotateOnHover))
-    }
-}
-
-private struct ConditionalLift: ViewModifier {
-    var enabled: Bool
-    var rotate: Bool
-
-    func body(content: Content) -> some View {
-        if enabled {
-            content.skLift(rotate: rotate)
-        } else {
+        VStack(alignment: .leading, spacing: spacing) {
             content
+        }
+        .padding(padding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(SKTheme.cardColor(for: scheme), in: RoundedRectangle(cornerRadius: SKTheme.radiusCard, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: SKTheme.radiusCard, style: .continuous)
+                .stroke(SKTheme.hairline, lineWidth: 1)
         }
     }
 }
@@ -63,12 +50,18 @@ struct SKTag: View {
     var label: String?
 
     var body: some View {
-        Text(label ?? kind.title)
-            .font(.system(size: 11, weight: .semibold, design: .rounded))
-            .foregroundStyle(kind.tint)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(kind.tint.opacity(0.12), in: Capsule())
+        HStack(spacing: 4) {
+            if kind == .completed {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 10, weight: .bold))
+            }
+            Text(label ?? kind.title)
+        }
+        .font(.system(size: 11, weight: .semibold, design: .rounded))
+        .foregroundStyle(kind.tint)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(kind.tint.opacity(0.12), in: Capsule())
     }
 }
 

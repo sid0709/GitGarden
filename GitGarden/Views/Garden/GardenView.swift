@@ -92,45 +92,43 @@ struct GardenView: View {
                 AccountStatGrid(account: account, days: plotDays, repos: selectedRepos)
             }
 
-            SKCard(padding: 22) {
-                if let account = selectedAccount {
-                    HStack(alignment: .center, spacing: 14) {
-                        SKAvatar(url: account.avatarURL, name: account.login, size: 44)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(account.displayName)
-                                .font(.system(size: 18, weight: .semibold, design: .rounded))
-                            Text(account.email.isEmpty ? "@\(account.login)" : account.email)
-                                .font(.system(size: 12, design: .rounded))
-                                .foregroundStyle(SKTheme.mute)
-                        }
-                        Spacer()
-                        if runtime.heatmapLoading.contains(account.login) {
-                            ProgressView()
-                                .controlSize(.small)
-                        }
-                        if let url = URL(string: account.htmlURL), !account.htmlURL.isEmpty {
-                            SKQuietButton(title: "GitHub") { NSWorkspace.shared.open(url) }
-                        }
-                        SKTag(kind: account.isFineGrained ? .ux : .ui, label: account.isFineGrained ? "Fine-grained" : "Classic PAT")
-                    }
-                    AccountProfileFacts(account: account)
-                    ContributionHistoryView(days: plotDays, showsPlanned: true)
-                    SKRateBar(remaining: account.rateLimitRemaining, limit: max(account.rateLimitLimit, 1))
-                    if let next = runtime.nextFire {
-                        Text("Next job \(next.formatted(date: .abbreviated, time: .shortened))")
+            if let account = selectedAccount {
+                HStack(alignment: .center, spacing: 14) {
+                    SKAvatar(url: account.avatarURL, name: account.login, size: 44)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(account.displayName)
+                            .font(.system(size: 18, weight: .semibold, design: .rounded))
+                        Text(account.email.isEmpty ? "@\(account.login)" : account.email)
                             .font(.system(size: 12, design: .rounded))
                             .foregroundStyle(SKTheme.mute)
                     }
-                } else {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Empty soil")
-                            .font(.system(size: 18, weight: .semibold, design: .rounded))
-                        Text("Paste a classic PAT with repo, user, and delete_repo. The plot fills in from GitHub’s contribution calendar.")
-                            .font(.system(size: 13, design: .rounded))
-                            .foregroundStyle(SKTheme.mute)
+                    Spacer()
+                    if runtime.heatmapLoading.contains(account.login) {
+                        ProgressView()
+                            .controlSize(.small)
                     }
-                    .frame(minHeight: 140, alignment: .leading)
+                    if let url = URL(string: account.htmlURL), !account.htmlURL.isEmpty {
+                        SKQuietButton(title: "GitHub") { NSWorkspace.shared.open(url) }
+                    }
+                    SKTag(kind: account.isFineGrained ? .ux : .ui, label: account.isFineGrained ? "Fine-grained" : "Classic PAT")
                 }
+                AccountProfileFacts(account: account)
+                ContributionHistoryView(days: plotDays, showsPlanned: true)
+                SKRateBar(remaining: account.rateLimitRemaining, limit: max(account.rateLimitLimit, 1))
+                if let next = runtime.nextFire {
+                    Text("Next job \(next.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.system(size: 12, design: .rounded))
+                        .foregroundStyle(SKTheme.mute)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Empty soil")
+                        .font(.system(size: 18, weight: .semibold, design: .rounded))
+                    Text("Paste a classic PAT with repo, user, and delete_repo. The plot fills in from GitHub’s contribution calendar.")
+                        .font(.system(size: 13, design: .rounded))
+                        .foregroundStyle(SKTheme.mute)
+                }
+                .frame(minHeight: 140, alignment: .leading)
             }
 
             if !visibleAccounts.isEmpty {
@@ -167,23 +165,21 @@ struct GardenView: View {
             RepoListView(repos: selectedRepos, query: search)
 
             if let live = campaigns.first(where: { $0.status == .running }) {
-                SKCard {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Now growing")
-                                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                                .foregroundStyle(SKTheme.mute)
-                            Text(live.name)
-                                .font(.system(size: 16, weight: .semibold, design: .rounded))
-                        }
-                        Spacer()
-                        SKTag(kind: live.dryRun ? .dry : .live)
-                        SKTag(kind: .running, label: "\(Int(live.progress * 100))%")
-                        SKQuietButton(title: "Pause") { runtime.pauseCampaign(live) }
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Now growing")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundStyle(SKTheme.mute)
+                        Text(live.name)
+                            .font(.system(size: 16, weight: .semibold, design: .rounded))
                     }
-                    ProgressView(value: live.progress)
-                        .tint(SKTheme.accent)
+                    Spacer()
+                    SKTag(kind: live.dryRun ? .dry : .live)
+                    SKTag(kind: .running, label: "\(Int(live.progress * 100))%")
+                    SKQuietButton(title: "Pause") { runtime.pauseCampaign(live) }
                 }
+                ProgressView(value: live.progress)
+                    .tint(SKTheme.accent)
             }
 
             if !seasons.isEmpty {
@@ -198,7 +194,7 @@ struct GardenView: View {
                                     .font(.system(size: 14, weight: .semibold, design: .rounded))
                                 HStack(spacing: 6) {
                                     SKTag(kind: campaign.dryRun ? .dry : .live)
-                                    SKTag(kind: .history, label: campaign.status.rawValue)
+                                    SKTag(kind: campaign.status == .completed ? .completed : campaign.status == .running ? .running : campaign.status == .failed ? .failed : .pending, label: campaign.status.rawValue)
                                 }
                             }
                             Spacer()

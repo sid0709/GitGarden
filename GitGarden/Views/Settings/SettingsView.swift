@@ -46,16 +46,18 @@ struct SettingsForm: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            SKCard {
+            VStack(alignment: .leading, spacing: 14) {
                 Toggle("Simulate new campaigns (no GitHub writes)", isOn: $settings.defaultDryRun)
                 Stepper("Default history: \(settings.defaultHistoryYears) years", value: $settings.defaultHistoryYears, in: 1...20)
                 TextField("Throwaway repo prefix", text: $settings.throwawayPrefix)
                     .textFieldStyle(.roundedBorder)
                 Stepper("Drip interval: \(Int(settings.dripInterval))s", value: $settings.dripInterval, in: 5.0...3600.0, step: 5)
             }
-            SKCard {
+
+            VStack(alignment: .leading, spacing: 8) {
                 Text("Worktrees")
-                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(SKTheme.mute)
                 TextField("Custom worktree path", text: $settings.worktreePath)
                     .textFieldStyle(.roundedBorder)
                 Text(settings.resolvedWorktreePath.path)
@@ -63,9 +65,11 @@ struct SettingsForm: View {
                     .foregroundStyle(SKTheme.mute)
                     .textSelection(.enabled)
             }
-            SKCard {
+
+            VStack(alignment: .leading, spacing: 10) {
                 Text("GitGarden work")
-                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(SKTheme.mute)
                 Text("Clear this app’s cache, campaign history, and session. Git commits already on GitHub stay.")
                     .font(.system(size: 13, design: .rounded))
                     .foregroundStyle(SKTheme.mute)
@@ -73,9 +77,11 @@ struct SettingsForm: View {
                     showClearWork = true
                 }
             }
-            SKCard {
+
+            VStack(alignment: .leading, spacing: 8) {
                 Text("About")
-                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(SKTheme.mute)
                 Text("GitGarden writes real git history and GitHub activity unless you opt into Simulate. New campaigns default to a 10-year backdated window you can shorten or stretch.")
                     .font(.system(size: 13, design: .rounded))
                     .foregroundStyle(SKTheme.mute)

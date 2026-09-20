@@ -51,24 +51,30 @@ struct CampaignsView: View {
                     .help("Clear GitGarden work")
                     .disabled(campaigns.isEmpty)
                 }
-                ScrollView {
-                    VStack(spacing: 8) {
+                ScrollView(showsIndicators: false) {
+                    LazyVStack(spacing: 4) {
                         ForEach(filtered) { campaign in
                             Button {
                                 withAnimation(SKMotion.spring) { selected = campaign.id }
                             } label: {
                                 SKFilmRow(selected: selected == campaign.id) {
                                     VStack(alignment: .leading, spacing: 6) {
+                                        HStack(alignment: .top, spacing: 8) {
                                             Text(campaign.name)
-                                            .font(.system(size: 14, weight: .semibold, design: .rounded))
-                                            .foregroundStyle(SKTheme.inkColor(for: scheme))
-                                            .lineLimit(2)
+                                                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                                .foregroundStyle(SKTheme.inkColor(for: scheme))
+                                                .lineLimit(2)
+                                                .skFillWidth()
+                                            if campaign.status == .completed {
+                                                Image(systemName: "checkmark.circle.fill")
+                                                    .font(.system(size: 16, weight: .semibold))
+                                                    .foregroundStyle(SKTagKind.completed.tint)
+                                            }
+                                        }
                                         HStack(spacing: 6) {
                                             SKTag(kind: campaign.kindTag)
                                             SKTag(kind: campaign.dryRun ? .dry : .live)
-                                            Text(campaign.status.rawValue)
-                                                .font(.system(size: 11, design: .rounded))
-                                                .foregroundStyle(SKTheme.mute)
+                                            SKTag(kind: campaign.statusTag, label: campaign.status.rawValue)
                                         }
                                         if campaign.status == .running {
                                             ProgressView(value: campaign.progress)
@@ -78,8 +84,10 @@ struct CampaignsView: View {
                                 }
                             }
                             .buttonStyle(.plain)
+                            .skFillWidth()
                         }
                     }
+                    .skFillWidth()
                 }
             }
             .padding(18)
@@ -134,6 +142,16 @@ private extension Campaign {
         case .history: return .history
         case .issues: return .issue
         case .pullRequests: return .pull
+        }
+    }
+
+    var statusTag: SKTagKind {
+        switch status {
+        case .running: return .running
+        case .failed: return .failed
+        case .completed: return .completed
+        case .planned, .draft, .paused: return .pending
+        default: return .ui
         }
     }
 }

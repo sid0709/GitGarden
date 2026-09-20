@@ -248,3 +248,44 @@ nonisolated enum PersonaLoader {
         PersonaCatalog.bundledYAML.map { load(from: $0.body) }
     }
 }
+
+nonisolated enum PersonaYAML {
+    static func uniqueName(_ base: String, existing: [String]) -> String {
+        let names = Set(existing.map { $0.lowercased() })
+        let trimmed = base.trimmingCharacters(in: .whitespacesAndNewlines)
+        let seed = trimmed.isEmpty ? "Custom" : trimmed
+        if !names.contains(seed.lowercased()) { return seed }
+        var n = 2
+        while names.contains("\(seed) \(n)".lowercased()) { n += 1 }
+        return "\(seed) \(n)"
+    }
+
+    static func uniqueID(_ base: String, existing: [String]) -> String {
+        let ids = Set(existing)
+        let seed = base.trimmingCharacters(in: .whitespacesAndNewlines)
+        let root = seed.isEmpty ? "custom" : seed
+        if !ids.contains(root) { return root }
+        var n = 2
+        while ids.contains("\(root)-\(n)") { n += 1 }
+        return "\(root)-\(n)"
+    }
+
+    static func replacingIdentity(_ yaml: String, id: String, name: String) -> String {
+        var lines = yaml.components(separatedBy: "\n")
+        var sawID = false
+        var sawName = false
+        for index in lines.indices {
+            let trimmed = lines[index].trimmingCharacters(in: .whitespaces)
+            if !sawID, trimmed.hasPrefix("id:") {
+                lines[index] = "id: \(id)"
+                sawID = true
+            } else if !sawName, trimmed.hasPrefix("name:") {
+                lines[index] = "name: \(name)"
+                sawName = true
+            }
+        }
+        if !sawName { lines.insert("name: \(name)", at: 0) }
+        if !sawID { lines.insert("id: \(id)", at: 0) }
+        return lines.joined(separator: "\n")
+    }
+}

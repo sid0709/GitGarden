@@ -70,19 +70,109 @@ final class GardenRuntime {
             settings.defaultDryRun = false
         }
         let existing = (try? context.fetch(FetchDescriptor<PersonaRecord>())) ?? []
-        let ids = Set(existing.map(\.personaID))
-        for item in PersonaCatalog.bundledYAML where !ids.contains(item.id) {
-            let body: String
-            if let url = Bundle.main.url(forResource: item.id, withExtension: "yaml"),
-               let text = try? String(contentsOf: url, encoding: .utf8),
-               !text.isEmpty {
-                body = text
-            } else {
-                body = item.body
-            }
-            context.insert(PersonaRecord(personaID: item.id, name: item.name, yamlBody: body, isBundled: true))
+        if existing.isEmpty {
+            restoreBundledPersonas()
         }
         try? context.save()
+    }
+
+    func restoreBundledPersonas() {
+        let existing = (try? context.fetch(FetchDescriptor<PersonaRecord>())) ?? []
+        let ids = Set(existing.map(\.personaID))
+        for item in PersonaCatalog.bundledYAML where !ids.contains(item.id) {
+            context.insert(
+                PersonaRecord(
+                    personaID: item.id,
+                    name: item.name,
+                    yamlBody: bundledPersonaBody(item),
+                    isBundled: true
+                )
+            )
+        }
+        try? context.save()
+    }
+
+    @discardableResult
+    func createPersona(copying source: PersonaRecord? = nil) -> PersonaRecord {
+        let records = (try? context.fetch(FetchDescriptor<PersonaRecord>())) ?? []
+        let baseName = source.map { "\($0.name) copy" } ?? "Custom"
+        let name = PersonaYAML.uniqueName(baseName, existing: records.map(\.name))
+        let baseID: String
+        if let source {
+            baseID = source.isBundled ? "\(source.personaID)-copy" : source.personaID
+        } else {
+            baseID = "custom"
+        }
+        let personaID = PersonaYAML.uniqueID(baseID, existing: records.map(\.personaID))
+        let yaml = PersonaYAML.replacingIdentity(
+            source?.yamlBody ?? PersonaCatalog.rustaceanYAML,
+            id: personaID,
+            name: name
+        )
+        let record = PersonaRecord(personaID: personaID, name: name, yamlBody: yaml, isBundled: false)
+        context.insert(record)
+        try? context.save()
+        return record
+    }
+
+    func savePersona(_ record: PersonaRecord, yaml: String) throws {
+        _ = try SimpleYAML.parse(yaml)
+        let persona = PersonaLoader.load(from: yaml)
+        let requestedName = record.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nextName = requestedName.isEmpty ? persona.name : requestedName
+        let requestedID = record.isBundled || persona.id.isEmpty ? record.personaID : persona.id
+        let clash = ((try? context.fetch(FetchDescriptor<PersonaRecord>())) ?? [])
+            .contains { $0.personaID == requestedID && $0.persistentModelID != record.persistentModelID }
+        let nextID = clash ? record.personaID : requestedID
+        record.personaID = nextID
+        record.name = nextName
+        record.yamlBody = PersonaYAML.replacingIdentity(yaml, id: nextID, name: nextName)
+        record.updatedAt = Date()
+        try context.save()
+    }
+
+    func resetPersona(_ record: PersonaRecord) {
+        guard record.isBundled,
+              let item = PersonaCatalog.bundledYAML.first(where: { $0.id == record.personaID }) else { return }
+        record.yamlBody = bundledPersonaBody(item)
+        record.name = item.name
+        record.updatedAt = Date()
+        try? context.save()
+    }
+
+    func deletePersona(_ record: PersonaRecord) {
+        let leftover = ((try? context.fetch(FetchDescriptor<PersonaRecord>())) ?? [])
+            .filter { $0.persistentModelID != record.persistentModelID }
+        let fallbackID = leftover.first?.personaID ?? "rustacean"
+        for account in ((try? context.fetch(FetchDescriptor<Account>())) ?? []) where account.personaID == record.personaID {
+            account.personaID = fallbackID
+        }
+        for campaign in ((try? context.fetch(FetchDescriptor<Campaign>())) ?? []) where campaign.personaID == record.personaID {
+            campaign.personaID = fallbackID
+        }
+        context.delete(record)
+        try? context.save()
+    }
+
+    func dismissAudit(_ event: AuditEvent) {
+        context.delete(event)
+        try? context.save()
+    }
+
+    func clearAudit() {
+        for event in ((try? context.fetch(FetchDescriptor<AuditEvent>())) ?? []) {
+            context.delete(event)
+        }
+        try? context.save()
+    }
+
+    private func bundledPersonaBody(_ item: (id: String, name: String, body: String)) -> String {
+        if let url = Bundle.main.url(forResource: item.id, withExtension: "yaml"),
+           let text = try? String(contentsOf: url, encoding: .utf8),
+           !text.isEmpty {
+            return text
+        }
+        return item.body
     }
 
     func persona(for id: String) -> Persona {

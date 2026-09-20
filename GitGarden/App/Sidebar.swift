@@ -18,7 +18,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
         case .campaigns: return "Campaigns"
         case .queue: return "Queue"
         case .personas: return "Personas"
-        case .audit: return "Audit"
+        case .audit: return "Console"
         case .settings: return "Settings"
         }
     }

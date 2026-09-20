@@ -46,7 +46,7 @@ struct QueueView: View {
             }
 
             if filtered.isEmpty {
-                SKCard {
+                VStack(alignment: .leading, spacing: 6) {
                     Text("The tape is blank")
                         .font(.system(size: 16, weight: .semibold, design: .rounded))
                     Text("Generate a campaign plan. Jobs land here as a single score you can skip, retry, or let drip.")
@@ -70,7 +70,7 @@ struct QueueView: View {
                             }
                         }
                         .frame(width: 16)
-                        SKCard(padding: 14, rotateOnHover: job.status == .running, lift: job.status == .running) {
+                        VStack(alignment: .leading, spacing: 8) {
                             HStack(alignment: .top) {
                                 VStack(alignment: .leading, spacing: 6) {
                                     Text(job.summary)
@@ -79,6 +79,7 @@ struct QueueView: View {
                                         SKTag(kind: job.tagKind)
                                         if job.attempt > 1 { SKTag(kind: .ux, label: "Retry \(job.attempt)") }
                                         if job.status == .running { SKTag(kind: .running) }
+                                        if job.status == .completed { SKTag(kind: .completed) }
                                     }
                                     Text("\(job.campaign?.name ?? "—") · \(job.accountLogin) · \(job.scheduledAt.formatted(date: .abbreviated, time: .shortened))")
                                         .font(.system(size: 11, design: .rounded))
@@ -106,6 +107,7 @@ struct QueueView: View {
                                 }
                             }
                         }
+                        .padding(.bottom, 8)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }

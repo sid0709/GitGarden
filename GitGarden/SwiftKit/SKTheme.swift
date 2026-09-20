@@ -40,7 +40,7 @@ enum SKTheme {
 }
 
 enum SKTagKind: String {
-    case bug, ux, ui, history, pull, issue, social, profile, running, pending, failed, live, dry
+    case bug, ux, ui, history, pull, issue, social, profile, running, pending, failed, live, dry, completed
 
     var title: String {
         switch self {
@@ -57,6 +57,7 @@ enum SKTagKind: String {
         case .failed: return "Failed"
         case .live: return "Live"
         case .dry: return "Dry run"
+        case .completed: return "Completed"
         }
     }
 
@@ -64,7 +65,7 @@ enum SKTagKind: String {
         switch self {
         case .bug, .failed, .issue: return Color(red: 0.95, green: 0.32, blue: 0.38)
         case .ux, .history, .pending, .dry: return Color(red: 0.93, green: 0.58, blue: 0.22)
-        case .ui, .pull, .running: return Color(red: 0.31, green: 0.72, blue: 0.45)
+        case .ui, .pull, .running, .completed: return Color(red: 0.31, green: 0.72, blue: 0.45)
         case .social, .profile, .live: return Color(red: 0.39, green: 0.50, blue: 0.95)
         }
     }
@@ -88,6 +89,10 @@ extension EnvironmentValues {
 }
 
 extension View {
+    func skFillWidth() -> some View {
+        frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     func skSoftTransition() -> some View {
         transition(.asymmetric(
             insertion: .opacity.combined(with: .scale(scale: 0.98)).combined(with: .offset(y: 8)),

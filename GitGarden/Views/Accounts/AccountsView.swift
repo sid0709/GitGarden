@@ -35,8 +35,8 @@ struct AccountsView: View {
                     }
                     .buttonStyle(.plain)
                 }
-                ScrollView {
-                    VStack(spacing: 8) {
+                ScrollView(showsIndicators: false) {
+                    LazyVStack(spacing: 4) {
                         ForEach(filtered) { account in
                             Button {
                                 withAnimation(SKMotion.spring) { selected = account.id }
@@ -58,13 +58,15 @@ struct AccountsView: View {
                                                     .foregroundStyle(SKTheme.mute)
                                             }
                                         }
-                                        Spacer()
+                                        Spacer(minLength: 0)
                                     }
                                 }
                             }
                             .buttonStyle(.plain)
+                            .skFillWidth()
                         }
                     }
+                    .skFillWidth()
                 }
             }
             .padding(18)
@@ -146,22 +148,20 @@ struct AccountDetailView: View {
             AccountStatGrid(account: account, days: days, repos: repos)
             AccountProfileFacts(account: account)
 
-            SKCard(padding: 18) {
-                HStack {
-                    Text("Contribution history")
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    Spacer()
-                    if runtime.heatmapLoading.contains(account.login) {
-                        ProgressView().controlSize(.small)
-                    }
+            HStack {
+                Text("Contribution history")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                Spacer()
+                if runtime.heatmapLoading.contains(account.login) {
+                    ProgressView().controlSize(.small)
                 }
-                ContributionHistoryView(days: days, showsPlanned: false)
             }
+            ContributionHistoryView(days: days, showsPlanned: false)
 
             OrgListView(orgs: orgs)
             RepoListView(repos: repos, query: search)
 
-            SKCard {
+            VStack(alignment: .leading, spacing: 8) {
                 LabeledContent("GitHub ID", value: account.githubID == 0 ? "—" : "\(account.githubID)")
                 LabeledContent("Created", value: account.githubCreatedAt?.formatted() ?? "—")
                 LabeledContent("Updated", value: account.githubUpdatedAt?.formatted() ?? "—")
@@ -188,7 +188,7 @@ struct AccountDetailView: View {
                     }
                 }
             }
-            SKCard {
+            VStack(alignment: .leading, spacing: 8) {
                 SecureField("Personal access token", text: $account.token)
                 if account.isFineGrained {
                     Text("Fine-grained token — classic scope warnings skipped.")
@@ -200,7 +200,7 @@ struct AccountDetailView: View {
                         .foregroundStyle(SKTheme.mute)
                 }
             }
-            SKCard {
+            VStack(alignment: .leading, spacing: 8) {
                 SKRateBar(remaining: account.rateLimitRemaining, limit: max(account.rateLimitLimit, 1))
                 if let reset = account.rateLimitReset {
                     LabeledContent("Resets", value: reset.formatted())
