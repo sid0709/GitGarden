@@ -53,7 +53,7 @@ struct ContentView: View {
 }
 
 #Preview {
-    let schema = Schema([Account.self, PersonaRecord.self, Campaign.self, Job.self, CreatedResource.self, AuditEvent.self, CampaignSnapshot.self, AppSettings.self])
+    let schema = GardenSchema.schema
     let container = try! ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
     ContentView()
         .environment(GardenRuntime(modelContainer: container))

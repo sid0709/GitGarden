@@ -296,7 +296,7 @@ struct GitGardenTests {
     @Test @MainActor func campaignPlanSkipAndDryRunControls() throws {
         let schema = Schema([
             Account.self, PersonaRecord.self, Campaign.self, Job.self,
-            CreatedResource.self, AuditEvent.self, CampaignSnapshot.self, AppSettings.self
+            CreatedResource.self, AuditEvent.self, CampaignSnapshot.self, AppSettings.self, AccountCron.self
         ])
         let container = try ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
         let runtime = GardenRuntime(modelContainer: container)
@@ -333,7 +333,7 @@ struct GitGardenTests {
     @Test @MainActor func clearGitGardenWorkKeepsAccountsAndDropsCampaigns() throws {
         let schema = Schema([
             Account.self, PersonaRecord.self, Campaign.self, Job.self,
-            CreatedResource.self, AuditEvent.self, CampaignSnapshot.self, AppSettings.self
+            CreatedResource.self, AuditEvent.self, CampaignSnapshot.self, AppSettings.self, AccountCron.self
         ])
         let container = try ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
         let runtime = GardenRuntime(modelContainer: container)
@@ -363,7 +363,7 @@ struct GitGardenTests {
     @Test @MainActor func failedCreateRepoJobsAreSkippedAndNeverRetried() throws {
         let schema = Schema([
             Account.self, PersonaRecord.self, Campaign.self, Job.self,
-            CreatedResource.self, AuditEvent.self, CampaignSnapshot.self, AppSettings.self
+            CreatedResource.self, AuditEvent.self, CampaignSnapshot.self, AppSettings.self, AccountCron.self
         ])
         let container = try ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
         let runtime = GardenRuntime(modelContainer: container)
@@ -415,7 +415,7 @@ struct GitGardenTests {
     @Test @MainActor func generatePlanRequiresExistingRepo() throws {
         let schema = Schema([
             Account.self, PersonaRecord.self, Campaign.self, Job.self,
-            CreatedResource.self, AuditEvent.self, CampaignSnapshot.self, AppSettings.self
+            CreatedResource.self, AuditEvent.self, CampaignSnapshot.self, AppSettings.self, AccountCron.self
         ])
         let container = try ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
         let runtime = GardenRuntime(modelContainer: container)
@@ -435,7 +435,7 @@ struct GitGardenTests {
     @Test @MainActor func personasCanBeCreatedDuplicatedAndDeleted() throws {
         let schema = Schema([
             Account.self, PersonaRecord.self, Campaign.self, Job.self,
-            CreatedResource.self, AuditEvent.self, CampaignSnapshot.self, AppSettings.self
+            CreatedResource.self, AuditEvent.self, CampaignSnapshot.self, AppSettings.self, AccountCron.self
         ])
         let container = try ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
         let runtime = GardenRuntime(modelContainer: container)
@@ -470,7 +470,7 @@ struct GitGardenTests {
     @Test @MainActor func auditEventsCanBeDismissed() throws {
         let schema = Schema([
             Account.self, PersonaRecord.self, Campaign.self, Job.self,
-            CreatedResource.self, AuditEvent.self, CampaignSnapshot.self, AppSettings.self
+            CreatedResource.self, AuditEvent.self, CampaignSnapshot.self, AppSettings.self, AccountCron.self
         ])
         let container = try ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
         let runtime = GardenRuntime(modelContainer: container)
@@ -484,5 +484,67 @@ struct GitGardenTests {
         runtime.clearAudit()
         events = try container.mainContext.fetch(FetchDescriptor<AuditEvent>())
         #expect(events.isEmpty)
+    }
+
+    @Test func cronTickSkipsDaysAlreadyApplied() {
+        let today = "2026-09-20"
+        #expect(CronTick.dueKinds(kind: .issues, lastIssueDay: "", lastPullDay: "", today: today) == [.issues])
+        #expect(CronTick.dueKinds(kind: .issues, lastIssueDay: today, lastPullDay: "", today: today).isEmpty)
+        #expect(CronTick.dueKinds(kind: .both, lastIssueDay: today, lastPullDay: "", today: today) == [.pullRequests])
+        #expect(CronTick.dueKinds(kind: .both, lastIssueDay: today, lastPullDay: today, today: today).isEmpty)
+        #expect(CronTick.remaining(target: 3, applied: 1, lastDay: today, today: today) == 2)
+        #expect(CronTick.remaining(target: 3, applied: 1, lastDay: "2020-01-01", today: today) == 3)
+        #expect(CronTick.remaining(target: 2, applied: 2, lastDay: today, today: today) == 0)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
+        #expect(CronTick.dayKey(Date(timeIntervalSince1970: 0), calendar: calendar) == "1970-01-01")
+    }
+
+    @Test @MainActor func campaignDailyScheduleHangsOffCampaignAndWaitsForSuccess() async throws {
+        let schema = GardenSchema.schema
+        let container = try ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let runtime = GardenRuntime(modelContainer: container)
+        let account = Account(login: "alice", name: "Alice", email: "a@x.com", token: "test")
+        container.mainContext.insert(account)
+        let campaign = Campaign(name: "Daily · RepoPlay", owner: account, personaID: "rustacean")
+        campaign.applyKind(.daily)
+        campaign.repoName = "RepoPlay"
+        campaign.commitCount = 3
+        campaign.issueCount = 2
+        campaign.prCount = 2
+        container.mainContext.insert(campaign)
+        try runtime.generatePlan(for: campaign)
+        try runtime.startCampaign(campaign, live: false)
+        #expect(campaign.kind == .daily)
+        #expect(campaign.status == .running)
+        #expect(campaign.jobs.isEmpty)
+        await runtime.applyDailyCampaign(campaign)
+        #expect(campaign.lastScheduleSucceeded == false)
+        #expect(!campaign.lastScheduleMessage.isEmpty)
+        #expect(campaign.status == .running)
+        let today = CronTick.dayKey(Date())
+        campaign.lastScheduleDay = today
+        campaign.appliedCommitsToday = 3
+        campaign.appliedIssuesToday = 2
+        campaign.appliedPRsToday = 2
+        #expect(campaign.isDailyCaughtUp)
+        await runtime.reconcileCrons()
+        #expect(campaign.appliedCommitsToday == 3)
+        #expect(campaign.status == .running)
+    }
+
+    @Test @MainActor func campaignKindDailyKeepsMixedCounts() throws {
+        let schema = GardenSchema.schema
+        let container = try ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let campaign = Campaign(name: "Daily")
+        container.mainContext.insert(campaign)
+        campaign.applyKind(.daily)
+        #expect(campaign.kind == .daily)
+        #expect(campaign.commitCount == 3)
+        #expect(campaign.issueCount == 2)
+        #expect(campaign.prCount == 2)
+        campaign.applyKind(.issues)
+        #expect(campaign.kind == .issues)
+        #expect(campaign.dailySchedule == false)
     }
 }

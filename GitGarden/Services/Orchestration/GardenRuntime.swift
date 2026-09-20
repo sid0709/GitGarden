@@ -15,6 +15,7 @@ final class GardenRuntime {
     var repositories: [String: [GitHubRepo]] = [:]
     var organizations: [String: [GitHubOrg]] = [:]
     var heatmapLoading: Set<String> = []
+    private var cronBusy: Set<String> = []
 
     init(modelContainer: ModelContainer) {
         self.modelContainer = modelContainer
@@ -41,6 +42,7 @@ final class GardenRuntime {
             }
         }
         background = activity
+        Task { await reconcileCrons() }
     }
 
     func stop() {
@@ -74,6 +76,199 @@ final class GardenRuntime {
             restoreBundledPersonas()
         }
         try? context.save()
+    }
+
+    func reconcileCrons(now: Date = Date()) async {
+        let today = CronTick.dayKey(now)
+        let campaigns = ((try? context.fetch(FetchDescriptor<Campaign>())) ?? []).filter {
+            $0.kind == .daily && $0.status == .running && !$0.dryRun
+        }
+        for campaign in campaigns {
+            guard let login = campaign.owner?.login else { continue }
+            if cronBusy.contains(login) || runningLogins.contains(login) { continue }
+            let rem = campaign.remainingDaily(on: today)
+            if rem.commits == 0 && rem.issues == 0 && rem.prs == 0 { continue }
+            await applyDailyCampaign(campaign, now: now)
+        }
+    }
+
+    func applyDailyCampaign(_ campaign: Campaign, now: Date = Date()) async {
+        guard campaign.kind == .daily else { return }
+        guard let account = campaign.owner else { return }
+        let login = account.login
+        if cronBusy.contains(login) || runningLogins.contains(login) { return }
+        cronBusy.insert(login)
+        defer { cronBusy.remove(login) }
+        let today = CronTick.dayKey(now)
+        guard RepoRef.parse(campaign.repoName, defaultOwner: account.login) != nil else {
+            campaign.lastScheduleSucceeded = false
+            campaign.lastScheduleAt = Date()
+            campaign.lastScheduleMessage = GitGardenError.missingRepo.localizedDescription
+            campaign.lastError = campaign.lastScheduleMessage
+            try? context.save()
+            audit(account: login, method: "CRON", path: "daily", status: 500, campaign: campaign.name, message: campaign.lastScheduleMessage)
+            return
+        }
+        if campaign.lastScheduleDay != today {
+            campaign.lastScheduleDay = today
+            campaign.appliedCommitsToday = 0
+            campaign.appliedIssuesToday = 0
+            campaign.appliedPRsToday = 0
+            try? context.save()
+        }
+        var notes: [String] = []
+        do {
+            let rem = campaign.remainingDaily(on: today)
+            if rem.commits > 0 || rem.prs > 0 || rem.issues > 0 {
+                notes.append(contentsOf: try applyDailyActions(campaign: campaign, account: account, day: today))
+            }
+            let leftover = campaign.remainingDaily(on: today)
+            campaign.lastScheduleAt = Date()
+            campaign.lastScheduleSucceeded = leftover.commits == 0 && leftover.issues == 0 && leftover.prs == 0
+            campaign.lastScheduleMessage = notes.isEmpty ? "Caught up" : notes.joined(separator: " · ")
+            if campaign.lastScheduleSucceeded { campaign.lastError = "" }
+            try context.save()
+            audit(account: login, method: "CRON", path: "daily \(campaign.repoName)", status: 0, campaign: campaign.name, message: campaign.lastScheduleMessage)
+        } catch {
+            campaign.lastScheduleSucceeded = false
+            campaign.lastScheduleAt = Date()
+            campaign.lastScheduleMessage = TokenRedactor.redact(error.localizedDescription)
+            campaign.lastError = campaign.lastScheduleMessage
+            try? context.save()
+            audit(account: login, method: "CRON", path: "daily \(campaign.repoName)", status: 500, campaign: campaign.name, message: campaign.lastScheduleMessage)
+        }
+    }
+
+    private func applyDailyActions(campaign: Campaign, account: Account, day: String) throws -> [String] {
+        let persona = persona(for: campaign.personaID.isEmpty ? account.personaID : campaign.personaID)
+        let ref = RepoRef.parse(campaign.repoName, defaultOwner: account.login)
+        let owner = ref?.owner ?? account.login
+        let repo = ref?.name ?? campaign.repoName
+        let defaultBranch = dailyDefaultBranch(for: account, repo: repo)
+        let gh = GitHubCLI(token: account.token)
+        var notes: [String] = []
+        let rem = campaign.remainingDaily(on: day)
+        if rem.commits > 0 || rem.prs > 0 {
+            notes.append(contentsOf: try applyDailyGit(
+                campaign: campaign,
+                account: account,
+                owner: owner,
+                repo: repo,
+                defaultBranch: defaultBranch,
+                persona: persona,
+                day: day,
+                commitCount: rem.commits,
+                prCount: rem.prs,
+                gh: gh
+            ))
+        }
+        for index in 0..<rem.issues {
+            var rng = SeededGenerator(seed: dailySeed(login: account.login, day: day, kind: "issue", index: campaign.appliedIssuesToday + index))
+            let slug = rng.pick(persona.slugs)
+            let title = MessageGenerator.fill(rng.pick(persona.issueTitles), slug: slug)
+            let body = MessageGenerator.fill(rng.pick(persona.issueBodies), slug: slug)
+            let issue = try gh.createIssue(owner: owner, repo: repo, title: title, body: body)
+            guard issue.number > 0, !issue.url.isEmpty else {
+                throw GitGardenError.gitFailed("Issue create did not return a GitHub URL.")
+            }
+            campaign.appliedIssuesToday += 1
+            track(kind: .issue, owner: owner, name: repo, number: issue.number, remoteID: issue.number, url: issue.url, campaign: campaign)
+            notes.append("issue #\(issue.number)")
+            try context.save()
+        }
+        return notes
+    }
+
+    private func applyDailyGit(
+        campaign: Campaign,
+        account: Account,
+        owner: String,
+        repo: String,
+        defaultBranch: String,
+        persona: Persona,
+        day: String,
+        commitCount: Int,
+        prCount: Int,
+        gh: GitHubCLI
+    ) throws -> [String] {
+        let git = BackdatedCommitEngine()
+        let root = settings().resolvedWorktreePath.appendingPathComponent("daily-\(account.login)-\(repo)", isDirectory: true)
+        try git.ensureExistingClone(at: root, owner: owner, repo: repo, token: account.token, gh: gh)
+        let name = account.name.isEmpty ? account.login : account.name
+        let email = account.email.isEmpty ? "\(account.login)@users.noreply.github.com" : account.email
+        try git.configureIdentity(at: root, name: name, email: email)
+        try git.checkoutMain(at: root, named: defaultBranch)
+        var notes: [String] = []
+        if commitCount > 0 {
+            for index in 0..<commitCount {
+                var rng = SeededGenerator(seed: dailySeed(login: account.login, day: day, kind: "commit", index: campaign.appliedCommitsToday + index))
+                let slug = rng.pick(persona.slugs)
+                let stamp = campaign.appliedCommitsToday + index + 1
+                try git.writeFiles(
+                    at: root,
+                    files: [FileChange(path: ".gitgarden/daily-\(day)-\(stamp).txt", content: "\(slug)\n")]
+                )
+                try git.commit(
+                    at: root,
+                    message: MessageGenerator.commitMessage(persona: persona, slug: slug, rng: &rng),
+                    date: Date(),
+                    name: name,
+                    email: email
+                )
+            }
+            try git.push(at: root, branch: defaultBranch)
+            campaign.appliedCommitsToday += commitCount
+            notes.append("\(commitCount) commit\(commitCount == 1 ? "" : "s")")
+            try context.save()
+        }
+        for index in 0..<prCount {
+            try git.checkoutMain(at: root, named: defaultBranch)
+            var rng = SeededGenerator(seed: dailySeed(login: account.login, day: day, kind: "pr", index: campaign.appliedPRsToday + index))
+            let slug = rng.pick(persona.slugs)
+            let branch = MessageGenerator.branchName(persona: persona, slug: slug, rng: &rng)
+            try git.checkoutBranch(at: root, name: branch)
+            let stamp = campaign.appliedPRsToday + index + 1
+            try git.writeFiles(
+                at: root,
+                files: [FileChange(path: ".gitgarden/pr-\(day)-\(stamp).txt", content: "\(slug)\n")]
+            )
+            try git.commit(
+                at: root,
+                message: MessageGenerator.commitMessage(persona: persona, slug: slug, rng: &rng),
+                date: Date(),
+                name: name,
+                email: email
+            )
+            try git.push(at: root, branch: branch)
+            let title = MessageGenerator.fill(rng.pick(persona.prTitles), slug: slug)
+            let body = MessageGenerator.fill(rng.pick(persona.prBodies), slug: slug)
+            let pull = try gh.createPull(owner: owner, repo: repo, title: title, body: body, head: branch, base: defaultBranch)
+            guard pull.number > 0, !pull.url.isEmpty else {
+                throw GitGardenError.gitFailed("Pull request create did not return a GitHub URL.")
+            }
+            campaign.appliedPRsToday += 1
+            track(kind: .pullRequest, owner: owner, name: repo, number: pull.number, remoteID: pull.number, url: pull.url, campaign: campaign)
+            notes.append("PR #\(pull.number)")
+            try context.save()
+        }
+        return notes
+    }
+
+    private func dailyDefaultBranch(for account: Account, repo: String) -> String {
+        if let match = account.cachedRepos.first(where: { $0.name.caseInsensitiveCompare(repo) == .orderedSame }),
+           let branch = match.defaultBranch, !branch.isEmpty {
+            return branch
+        }
+        return "main"
+    }
+
+    private func dailySeed(login: String, day: String, kind: String, index: Int) -> UInt64 {
+        var hasher = Hasher()
+        hasher.combine(login)
+        hasher.combine(day)
+        hasher.combine(kind)
+        hasher.combine(index)
+        return UInt64(bitPattern: Int64(hasher.finalize()))
     }
 
     func restoreBundledPersonas() {
@@ -249,13 +444,37 @@ final class GardenRuntime {
 
     func generatePlan(for campaign: Campaign) throws {
         guard let owner = campaign.owner else { throw GitGardenError.missingAccount }
-        if campaign.status == .running {
+        if campaign.status == .running && campaign.kind != .daily {
             pauseCampaign(campaign)
         }
         guard let ref = RepoRef.parse(campaign.repoName, defaultOwner: owner.login) else {
             throw GitGardenError.missingRepo
         }
         campaign.repoName = ref.name
+        if campaign.kind == .daily {
+            campaign.jobs.forEach { context.delete($0) }
+            campaign.jobs = []
+            campaign.plan = CampaignPlanDocument(
+                steps: [],
+                heatmap: [],
+                summary: PlanSummary(
+                    commitCount: campaign.commitCount,
+                    prCount: campaign.prCount,
+                    issueCount: campaign.issueCount,
+                    reviewCount: 0,
+                    releaseCount: 0,
+                    socialCount: 0,
+                    estimatedAPICalls: campaign.commitCount + campaign.issueCount + campaign.prCount * 2
+                ),
+                seed: UInt64(bitPattern: campaign.seed)
+            )
+            if campaign.status != .running {
+                campaign.status = .planned
+            }
+            campaign.updatedAt = Date()
+            try context.save()
+            return
+        }
         let persona = persona(for: campaign.personaID)
         let match = owner.cachedRepos.first {
             $0.name.caseInsensitiveCompare(ref.name) == .orderedSame
@@ -318,6 +537,20 @@ final class GardenRuntime {
     }
 
     func startCampaign(_ campaign: Campaign, live: Bool) throws {
+        if campaign.kind == .daily {
+            if campaign.plan == nil {
+                try generatePlan(for: campaign)
+            }
+            campaign.dryRun = !live
+            campaign.status = .running
+            campaign.lastError = ""
+            campaign.updatedAt = Date()
+            try context.save()
+            if live {
+                Task { await applyDailyCampaign(campaign) }
+            }
+            return
+        }
         guard campaign.plan != nil else { throw GitGardenError.planMissing }
         if campaign.status == .running {
             for login in campaign.involvedLogins {
@@ -526,7 +759,9 @@ final class GardenRuntime {
         for campaign in ((try? context.fetch(FetchDescriptor<Campaign>())) ?? []) {
             discardCreateRepoJobs(on: campaign)
         }
-        let campaigns = ((try? context.fetch(FetchDescriptor<Campaign>())) ?? []).filter { $0.status == .running }
+        let campaigns = ((try? context.fetch(FetchDescriptor<Campaign>())) ?? []).filter {
+            $0.status == .running && $0.kind != .daily
+        }
         let dueLogins = Set(campaigns.flatMap(\.involvedLogins))
         nextFire = campaigns
             .flatMap(\.jobs)
@@ -544,6 +779,7 @@ final class GardenRuntime {
             }
         }
         try? context.save()
+        Task { await reconcileCrons() }
     }
 
     private func kickAccount(_ login: String) {
@@ -925,7 +1161,7 @@ enum ConflictGuard {
             throw GitGardenError.conflict("An account in this campaign is already running a job.")
         }
         let others = ((try? context.fetch(FetchDescriptor<Campaign>())) ?? []).filter {
-            $0.status == .running && $0.persistentModelID != campaign.persistentModelID
+            $0.status == .running && $0.kind != .daily && $0.persistentModelID != campaign.persistentModelID
         }
         for other in others {
             if !Set(other.involvedLogins).isDisjoint(with: logins) {

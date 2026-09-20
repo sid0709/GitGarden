@@ -7,16 +7,7 @@ struct GitGardenApp: App {
     @State private var runtime: GardenRuntime
 
     init() {
-        let schema = Schema([
-            Account.self,
-            PersonaRecord.self,
-            Campaign.self,
-            Job.self,
-            CreatedResource.self,
-            AuditEvent.self,
-            CampaignSnapshot.self,
-            AppSettings.self
-        ])
+        let schema = GardenSchema.schema
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
         do {
             let container = try ModelContainer(for: schema, configurations: [configuration])

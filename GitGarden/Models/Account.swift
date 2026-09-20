@@ -46,6 +46,9 @@ final class Account {
     @Relationship(deleteRule: .nullify, inverse: \Campaign.collaborator)
     var collabCampaigns: [Campaign]
 
+    @Relationship(deleteRule: .cascade, inverse: \AccountCron.account)
+    var crons: [AccountCron]
+
     init(
         login: String,
         name: String = "",
@@ -96,7 +99,10 @@ final class Account {
         self.orgsJSON = nil
         self.ownedCampaigns = []
         self.collabCampaigns = []
+        self.crons = []
     }
+
+    var cron: AccountCron? { crons.first }
 
     func apply(user: GitHubUser) {
         login = user.login
