@@ -1,0 +1,29 @@
+id: typescript-web
+name: TypeScript Web
+language: typescript
+commit_style: conventional
+timezone: America/Los_Angeles
+working_hours: [10, 19]
+weekend_weight: 0.2
+vacation_gaps:
+  - start: "08-10"
+    end: "08-20"
+branch_patterns:
+  - feat/{slug}
+  - fix/{slug}
+messages:
+  - "feat({slug}): add client hook"
+  - "fix({slug}): guard undefined state"
+  - "test({slug}): add render case"
+issue_titles:
+  - "{slug} flashes empty state"
+issue_bodies:
+  - "Repro on the {slug} screen after a hard refresh."
+pr_titles:
+  - "feat: {slug} screen polish"
+pr_bodies:
+  - "Implements the {slug} flow. Fixes #{issue}"
+review_comments:
+  - "Can we memoize the {slug} selector?"
+bio: "Frontend person. TypeScript, a11y, and stubborn CSS."
+slugs: [auth, inbox, settings, editor, search, billing]

@@ -1,0 +1,38 @@
+id: rustacean
+name: Rustacean
+language: rust
+commit_style: conventional
+timezone: America/Chicago
+working_hours: [9, 18]
+weekend_weight: 0.15
+vacation_gaps:
+  - start: "12-20"
+    end: "01-04"
+branch_patterns:
+  - feat/{slug}
+  - fix/{slug}
+  - chore/{slug}
+messages:
+  - "feat: add {slug} helper"
+  - "fix: handle {slug} edge case"
+  - "refactor: extract {slug} module"
+  - "test: cover {slug} path"
+  - "docs: mention {slug} usage"
+  - "chore: tidy {slug} comments"
+issue_titles:
+  - "Handle empty input in {slug}"
+  - "{slug} panics on invalid UTF-8"
+  - "Document {slug} error types"
+issue_bodies:
+  - "Saw this while running the {slug} path locally."
+  - "Would be nicer if `{slug}` returned Result instead of unwrapping."
+pr_titles:
+  - "feat: {slug} pipeline"
+  - "fix: {slug} null path"
+pr_bodies:
+  - "This wires up `{slug}` and adds a regression test. Fixes #{issue}"
+review_comments:
+  - "Nice catch on the `{slug}` path."
+  - "Can we add a test for the empty buffer case?"
+bio: "Systems tinkerer. Rust, git, and long walks through compiler errors."
+slugs: [parser, auth, queue, cache, codec, walker, index, scheduler]

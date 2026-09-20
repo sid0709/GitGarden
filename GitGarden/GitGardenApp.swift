@@ -1,32 +1,48 @@
-//
-//  GitGardenApp.swift
-//  GitGarden
-//
-//  Created by sid on 9/19/26.
-//
-
 import SwiftUI
 import SwiftData
 
 @main
 struct GitGardenApp: App {
-    var sharedModelContainer: ModelContainer = {
-        let schema = Schema([
-            Item.self,
-        ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+    let sharedModelContainer: ModelContainer
+    @State private var runtime: GardenRuntime
 
+    init() {
+        let schema = Schema([
+            Account.self,
+            PersonaRecord.self,
+            Campaign.self,
+            Job.self,
+            CreatedResource.self,
+            AuditEvent.self,
+            CampaignSnapshot.self,
+            AppSettings.self
+        ])
+        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
         do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
+            let container = try ModelContainer(for: schema, configurations: [configuration])
+            sharedModelContainer = container
+            _runtime = State(initialValue: GardenRuntime(modelContainer: container))
         } catch {
             fatalError("Could not create ModelContainer: \(error)")
         }
-    }()
+    }
 
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environment(runtime)
+                .onAppear { runtime.start() }
         }
         .modelContainer(sharedModelContainer)
+        .windowStyle(.hiddenTitleBar)
+        .windowToolbarStyle(.unifiedCompact)
+        .defaultSize(width: 1280, height: 840)
+
+        MenuBarExtra("GitGarden", systemImage: "leaf.fill") {
+            MenuBarView()
+                .environment(runtime)
+                .modelContainer(sharedModelContainer)
+        }
+        .menuBarExtraStyle(.window)
     }
 }

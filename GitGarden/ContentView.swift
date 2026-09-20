@@ -1,59 +1,56 @@
-//
-//  ContentView.swift
-//  GitGarden
-//
-//  Created by sid on 9/19/26.
-//
-
 import SwiftUI
 import SwiftData
 
 struct ContentView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Query private var items: [Item]
+    @Environment(GardenRuntime.self) private var runtime
+    @Environment(\.colorScheme) private var scheme
+    @State private var selection: SidebarItem = .garden
+    @State private var search = ""
 
     var body: some View {
-        NavigationSplitView {
-            List {
-                ForEach(items) { item in
-                    NavigationLink {
-                        Text("Item at \(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))")
-                    } label: {
-                        Text(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))
-                    }
+        HStack(spacing: 0) {
+            SKIconRail(selection: $selection)
+            VStack(spacing: 0) {
+                SKTopBar(title: "GitGarden", subtitle: selection.title, search: $search)
+                ZStack {
+                    SKTheme.canvasColor(for: scheme).ignoresSafeArea()
+                    page
+                        .id(selection)
+                        .skSoftTransition()
                 }
-                .onDelete(perform: deleteItems)
+                .animation(SKMotion.spring, value: selection)
             }
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200)
-            .toolbar {
-                ToolbarItem {
-                    Button(action: addItem) {
-                        Label("Add Item", systemImage: "plus")
-                    }
-                }
-            }
-        } detail: {
-            Text("Select an item")
         }
+        .background(SKTheme.canvasColor(for: scheme))
+        .environment(\.gardenSearch, search)
+        .onAppear { runtime.seedDefaults() }
     }
 
-    private func addItem() {
-        withAnimation {
-            let newItem = Item(timestamp: Date())
-            modelContext.insert(newItem)
-        }
-    }
-
-    private func deleteItems(offsets: IndexSet) {
-        withAnimation {
-            for index in offsets {
-                modelContext.delete(items[index])
-            }
+    @ViewBuilder
+    private var page: some View {
+        switch selection {
+        case .garden:
+            GardenView()
+        case .accounts:
+            AccountsView()
+        case .campaigns:
+            CampaignsView()
+        case .queue:
+            QueueView()
+        case .personas:
+            PersonasView()
+        case .audit:
+            AuditView()
+        case .settings:
+            SettingsView()
         }
     }
 }
 
 #Preview {
+    let schema = Schema([Account.self, PersonaRecord.self, Campaign.self, Job.self, CreatedResource.self, AuditEvent.self, CampaignSnapshot.self, AppSettings.self])
+    let container = try! ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
     ContentView()
-        .modelContainer(for: Item.self, inMemory: true)
+        .environment(GardenRuntime(modelContainer: container))
+        .modelContainer(container)
 }

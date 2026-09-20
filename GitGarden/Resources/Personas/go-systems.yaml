@@ -1,0 +1,27 @@
+id: go-systems
+name: Go Systems
+language: go
+commit_style: terse
+timezone: America/New_York
+working_hours: [8, 17]
+weekend_weight: 0.08
+vacation_gaps: []
+branch_patterns:
+  - feat/{slug}
+  - fix/{slug}
+messages:
+  - "{slug}: handle shutdown"
+  - "{slug}: tighten timeouts"
+  - "tests for {slug} retry"
+issue_titles:
+  - "{slug} leaks goroutines on cancel"
+issue_bodies:
+  - "Context cancel on {slug} still leaves a waiter."
+pr_titles:
+  - "{slug}: bounded worker pool"
+pr_bodies:
+  - "Fixes #{issue} by bounding {slug} workers."
+review_comments:
+  - "Need a test with a canceled context."
+bio: "Go, queues, and mildly obsessive tracing."
+slugs: [worker, gateway, ingest, replica, lease]
