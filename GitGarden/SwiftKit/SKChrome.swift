@@ -11,7 +11,11 @@ struct SKIconRail: View {
 
     var body: some View {
         VStack(spacing: 18) {
-            SKMeshBlob(size: 38)
+            Image("AppLogo")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 38, height: 38)
+                .clipShape(RoundedRectangle(cornerRadius: 38 * 0.34, style: .continuous))
                 .skGlow()
                 .padding(.top, 36)
                 .help("GitGarden")
@@ -51,8 +55,9 @@ struct SKIconRail: View {
                 Image(systemName: item.icon)
                     .font(.system(size: 18, weight: selected ? .semibold : .regular))
                     .foregroundStyle(selected ? SKTheme.accent : SKTheme.mute)
-                    .frame(width: 42, height: 42)
             }
+            .frame(maxWidth: .infinity, minHeight: 48)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .help(item.title)

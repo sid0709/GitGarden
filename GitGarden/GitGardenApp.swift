@@ -19,7 +19,7 @@ struct GitGardenApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "main") {
             ContentView()
                 .environment(runtime)
                 .onAppear { runtime.start() }
@@ -29,7 +29,7 @@ struct GitGardenApp: App {
         .windowToolbarStyle(.unifiedCompact)
         .defaultSize(width: 1280, height: 840)
 
-        MenuBarExtra("GitGarden", systemImage: "leaf.fill") {
+        MenuBarExtra("GitGarden", image: "TrayIcon") {
             MenuBarView()
                 .environment(runtime)
                 .modelContainer(sharedModelContainer)
