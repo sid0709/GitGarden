@@ -39,32 +39,6 @@ struct SKGlowSweep: ViewModifier {
     }
 }
 
-struct SKMeshBlob: View {
-    var size: CGFloat = 36
-
-    var body: some View {
-        TimelineView(.animation) { timeline in
-            let time = Float(timeline.date.timeIntervalSinceReferenceDate)
-            MeshGradient(
-                width: 3,
-                height: 3,
-                points: [
-                    .init(0, 0), .init(0.5, 0), .init(1, 0),
-                    .init(0, 0.5), .init(0.45 + 0.08 * sin(time), 0.52), .init(1, 0.5),
-                    .init(0, 1), .init(0.5, 1), .init(1, 1)
-                ],
-                colors: [
-                    SKTheme.peach, SKTheme.accent, SKTheme.coral,
-                    Color.orange, SKTheme.rose, SKTheme.peach,
-                    SKTheme.coral, Color.pink.opacity(0.85), SKTheme.accent
-                ]
-            )
-        }
-        .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: size * 0.34, style: .continuous))
-    }
-}
-
 struct SKHoverLift: ViewModifier {
     var rotate: Bool = false
     @State private var hovering = false

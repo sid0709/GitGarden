@@ -72,11 +72,17 @@ struct CampaignsView: View {
                                             }
                                         }
                                         HStack(spacing: 6) {
-                                            SKTag(kind: campaign.kindTag)
+                                            SKTag(kind: campaign.kindTag, label: campaign.kind.title)
                                             SKTag(kind: campaign.dryRun ? .dry : .live)
                                             SKTag(kind: campaign.statusTag, label: campaign.status.rawValue)
+                                            if campaign.kind == .daily, campaign.status == .running {
+                                                SKTag(
+                                                    kind: campaign.isDailyCaughtUp ? .completed : .pending,
+                                                    label: campaign.isDailyCaughtUp ? "Applied today" : "Due today"
+                                                )
+                                            }
                                         }
-                                        if campaign.status == .running {
+                                        if campaign.status == .running && campaign.kind != .daily {
                                             ProgressView(value: campaign.progress)
                                                 .tint(SKTheme.accent)
                                         }
@@ -103,7 +109,7 @@ struct CampaignsView: View {
                     VStack(spacing: 10) {
                         Text("Compose a season")
                             .font(.system(size: 20, weight: .bold, design: .rounded))
-                        Text("Pick one job: fake commit history, issues, or pull requests. Each campaign writes into a repo you already have.")
+                        Text("Compose a season or a daily schedule. One-shot campaigns grow history, issues, or PRs; Daily keeps applying counts into one repo each launch.")
                             .foregroundStyle(SKTheme.mute)
                         SKPrimaryButton(title: "New campaign", enabled: !accounts.isEmpty) { showComposer = true }
                     }
@@ -139,6 +145,7 @@ struct CampaignsView: View {
 private extension Campaign {
     var kindTag: SKTagKind {
         switch kind {
+        case .daily: return .live
         case .history: return .history
         case .issues: return .issue
         case .pullRequests: return .pull
@@ -162,13 +169,13 @@ struct CampaignComposerView: View {
     var accounts: [Account]
     var personas: [PersonaRecord]
 
-    @State private var kind: CampaignKind = .history
+    @State private var kind: CampaignKind = .daily
     @State private var ownerLogin = ""
     @State private var personaID = "rustacean"
     @State private var historyYears = 10
-    @State private var commitCount = 400
-    @State private var prCount = 4
-    @State private var issueCount = 8
+    @State private var commitCount = 3
+    @State private var prCount = 2
+    @State private var issueCount = 2
     @State private var start = Calendar.current.date(byAdding: .year, value: -10, to: Date()) ?? Date()
     @State private var end = Date()
     @State private var repoName = ""
@@ -213,6 +220,13 @@ struct CampaignComposerView: View {
                 }
                 Section(kind.title) {
                     switch kind {
+                    case .daily:
+                        Stepper("Commits per day: \(commitCount)", value: $commitCount, in: 0...20)
+                        Stepper("Issues per day: \(issueCount)", value: $issueCount, in: 0...20)
+                        Stepper("Pull requests per day: \(prCount)", value: $prCount, in: 0...20)
+                        Text("On launch GitGarden applies whatever is still due today, then marks those counts done. Pause the campaign to stop.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     case .history:
                         Stepper("Past \(historyYears) years", value: $historyYears, in: 1...20)
                             .onChange(of: historyYears) { _, years in
@@ -236,7 +250,7 @@ struct CampaignComposerView: View {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Run live") { save() }
+                    Button(kind == .daily ? "Schedule daily" : "Run live") { save() }
                 }
             }
             .onAppear {
@@ -244,7 +258,7 @@ struct CampaignComposerView: View {
                 personaID = personas.first?.personaID ?? "rustacean"
                 let settings = runtime.settings()
                 historyYears = max(1, settings.defaultHistoryYears)
-                applyHistoryYears(historyYears)
+                applyKindDefaults(kind)
             }
             .task(id: ownerLogin) {
                 guard let account = accounts.first(where: { $0.login == ownerLogin }) else { return }
@@ -263,6 +277,7 @@ struct CampaignComposerView: View {
     private var name: String {
         let repo = repoName.isEmpty ? "repo" : (RepoRef.parse(repoName, defaultOwner: ownerLogin)?.name ?? repoName)
         switch kind {
+        case .daily: return "Daily · \(repo)"
         case .history: return "\(historyYears)-year history · \(repo)"
         case .issues: return "Issues · \(repo)"
         case .pullRequests: return "Pull requests · \(repo)"
@@ -278,14 +293,33 @@ struct CampaignComposerView: View {
             errorMessage = GitGardenError.missingRepo.localizedDescription
             return
         }
+        if kind == .daily, commitCount + issueCount + prCount == 0 {
+            errorMessage = "Set at least one daily count."
+            return
+        }
         let campaign = Campaign(name: name, owner: owner, personaID: personaID)
         campaign.applyKind(kind)
         campaign.dryRun = false
         campaign.dripMode = false
         campaign.throwawayRepo = false
-        campaign.commitCount = kind == .history ? commitCount : 0
-        campaign.prCount = kind == .pullRequests ? prCount : 0
-        campaign.issueCount = kind == .issues ? issueCount : 0
+        switch kind {
+        case .daily:
+            campaign.commitCount = commitCount
+            campaign.prCount = prCount
+            campaign.issueCount = issueCount
+        case .history:
+            campaign.commitCount = commitCount
+            campaign.prCount = 0
+            campaign.issueCount = 0
+        case .issues:
+            campaign.commitCount = 0
+            campaign.prCount = 0
+            campaign.issueCount = issueCount
+        case .pullRequests:
+            campaign.commitCount = 0
+            campaign.prCount = prCount
+            campaign.issueCount = 0
+        }
         campaign.startDate = start
         campaign.endDate = end
         campaign.repoName = repoName
@@ -303,6 +337,12 @@ struct CampaignComposerView: View {
 
     private func applyKindDefaults(_ kind: CampaignKind) {
         switch kind {
+        case .daily:
+            commitCount = 3
+            issueCount = 2
+            prCount = 2
+            end = Date()
+            start = Calendar.current.date(byAdding: .day, value: -30, to: end) ?? end
         case .history:
             applyHistoryYears(historyYears)
         case .issues, .pullRequests:

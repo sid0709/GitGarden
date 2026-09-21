@@ -30,6 +30,14 @@ final class Campaign {
     var lastError: String
     var seed: Int64
     var workspaceID: String
+    var dailySchedule: Bool = false
+    var lastScheduleDay: String = ""
+    var appliedCommitsToday: Int = 0
+    var appliedIssuesToday: Int = 0
+    var appliedPRsToday: Int = 0
+    var lastScheduleSucceeded: Bool = false
+    var lastScheduleMessage: String = ""
+    var lastScheduleAt: Date?
 
     var owner: Account?
     var collaborator: Account?
@@ -77,6 +85,14 @@ final class Campaign {
         self.lastError = ""
         self.seed = Int64.random(in: 1...Int64.max)
         self.workspaceID = UUID().uuidString
+        self.dailySchedule = false
+        self.lastScheduleDay = ""
+        self.appliedCommitsToday = 0
+        self.appliedIssuesToday = 0
+        self.appliedPRsToday = 0
+        self.lastScheduleSucceeded = false
+        self.lastScheduleMessage = ""
+        self.lastScheduleAt = nil
         self.owner = owner
         self.collaborator = collaborator
         self.jobs = []

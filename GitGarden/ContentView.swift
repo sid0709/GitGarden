@@ -27,6 +27,7 @@ struct ContentView: View {
         .frame(minWidth: 960, minHeight: 640)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(SKTheme.canvasColor(for: scheme))
+        .background(WindowAccessor { runtime.mainWindow = $0 })
         .environment(\.gardenSearch, search)
         .onAppear { runtime.seedDefaults() }
     }
@@ -53,7 +54,7 @@ struct ContentView: View {
 }
 
 #Preview {
-    let schema = Schema([Account.self, PersonaRecord.self, Campaign.self, Job.self, CreatedResource.self, AuditEvent.self, CampaignSnapshot.self, AppSettings.self])
+    let schema = GardenSchema.schema
     let container = try! ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
     ContentView()
         .environment(GardenRuntime(modelContainer: container))

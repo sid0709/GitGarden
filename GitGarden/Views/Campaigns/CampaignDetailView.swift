@@ -20,9 +20,18 @@ struct CampaignDetailView: View {
                         .font(.system(size: 13, design: .rounded))
                         .foregroundStyle(SKTheme.mute)
                     HStack(spacing: 6) {
-                        SKTag(kind: campaign.kind == .issues ? .issue : campaign.kind == .pullRequests ? .pull : .history)
+                        SKTag(
+                            kind: campaign.kind == .issues ? .issue : campaign.kind == .pullRequests ? .pull : campaign.kind == .daily ? .live : .history,
+                            label: campaign.kind.title
+                        )
                         SKTag(kind: campaign.dryRun ? .dry : .live)
                         SKTag(kind: statusTag, label: campaign.status.rawValue)
+                        if campaign.kind == .daily, campaign.status == .running {
+                            SKTag(
+                                kind: campaign.isDailyCaughtUp ? .completed : .pending,
+                                label: campaign.isDailyCaughtUp ? "Applied today" : "Due today"
+                            )
+                        }
                     }
                 }
                 Spacer()
@@ -42,7 +51,9 @@ struct CampaignDetailView: View {
                 }
             }
 
-            if let plan = campaign.plan {
+            if campaign.kind == .daily {
+                DailySchedulePanel(campaign: campaign)
+            } else if let plan = campaign.plan {
                 HStack {
                     Text("Season preview")
                         .font(.system(size: 14, weight: .semibold, design: .rounded))
@@ -60,6 +71,7 @@ struct CampaignDetailView: View {
                     value: Binding(
                         get: {
                             switch campaign.kind {
+                            case .daily: return 0
                             case .history: return campaign.historyYears
                             case .issues: return campaign.issueCount
                             case .pullRequests: return campaign.prCount
@@ -67,6 +79,8 @@ struct CampaignDetailView: View {
                         },
                         set: { value in
                             switch campaign.kind {
+                            case .daily:
+                                break
                             case .history:
                                 campaign.setHistoryYears(value)
                                 campaign.commitCount = Campaign.suggestedCommitCount(forYears: value)
@@ -98,13 +112,15 @@ struct CampaignDetailView: View {
                         do { try runtime.generatePlan(for: campaign) }
                         catch { errorMessage = error.localizedDescription }
                     }
+                    .disabled(campaign.kind == .daily)
                     SKQuietButton(title: "Simulate") {
                         do { try runtime.startCampaign(campaign, live: false) }
                         catch { errorMessage = error.localizedDescription }
                     }
+                    .disabled(campaign.kind == .daily)
                     SKPrimaryButton(
-                        title: "Run live",
-                        enabled: campaign.status != .running || campaign.dryRun
+                        title: campaign.kind == .daily ? "Schedule daily" : "Run live",
+                        enabled: campaign.status != .running || campaign.dryRun || campaign.kind == .daily
                     ) {
                         do { try runtime.startCampaign(campaign, live: true) }
                         catch { errorMessage = error.localizedDescription }
@@ -162,45 +178,47 @@ struct CampaignDetailView: View {
                 SKPagerBar(page: $resourcePage, total: campaign.resources.count, noun: "artifacts")
             }
 
-            Text("Score")
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .foregroundStyle(SKTheme.mute)
+            if campaign.kind != .daily {
+                Text("Score")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(SKTheme.mute)
 
-            ForEach(SKPaging.slice(scoreJobs, page: jobPage)) { job in
-                HStack(alignment: .top, spacing: 12) {
-                    VStack {
-                        Circle()
-                            .fill(StatusTint.color(for: job.status))
-                            .frame(width: 9, height: 9)
-                        Rectangle()
-                            .fill(SKTheme.hairline)
-                            .frame(width: 2)
-                    }
-                    .frame(width: 12)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(job.summary)
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
-                        Text("\(job.accountLogin) · \(job.kind.title) · \(job.scheduledAt.formatted(date: .abbreviated, time: .shortened))")
-                            .font(.system(size: 11, design: .rounded))
-                            .foregroundStyle(SKTheme.mute)
-                        if !job.lastError.isEmpty {
-                            Text(job.lastError)
+                ForEach(SKPaging.slice(scoreJobs, page: jobPage)) { job in
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack {
+                            Circle()
+                                .fill(StatusTint.color(for: job.status))
+                                .frame(width: 9, height: 9)
+                            Rectangle()
+                                .fill(SKTheme.hairline)
+                                .frame(width: 2)
+                        }
+                        .frame(width: 12)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(job.summary)
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                            Text("\(job.accountLogin) · \(job.kind.title) · \(job.scheduledAt.formatted(date: .abbreviated, time: .shortened))")
                                 .font(.system(size: 11, design: .rounded))
-                                .foregroundStyle(SKTheme.coral)
+                                .foregroundStyle(SKTheme.mute)
+                            if !job.lastError.isEmpty {
+                                Text(job.lastError)
+                                    .font(.system(size: 11, design: .rounded))
+                                    .foregroundStyle(SKTheme.coral)
+                            }
                         }
-                    }
-                    Spacer()
-                    if job.status == .failed {
-                        SKQuietButton(title: "Retry") {
-                            do { try runtime.retryJob(job) }
-                            catch { errorMessage = error.localizedDescription }
+                        Spacer()
+                        if job.status == .failed {
+                            SKQuietButton(title: "Retry") {
+                                do { try runtime.retryJob(job) }
+                                catch { errorMessage = error.localizedDescription }
+                            }
+                        } else if job.status == .pending {
+                            SKQuietButton(title: "Skip") { runtime.skipJob(job) }
                         }
-                    } else if job.status == .pending {
-                        SKQuietButton(title: "Skip") { runtime.skipJob(job) }
                     }
                 }
+                SKPagerBar(page: $jobPage, total: scoreJobs.count, noun: "jobs")
             }
-            SKPagerBar(page: $jobPage, total: scoreJobs.count, noun: "jobs")
         }
         .alert("Campaign error", isPresented: Binding(
             get: { errorMessage != nil },
@@ -214,7 +232,9 @@ struct CampaignDetailView: View {
             NukeConfirmSheet(campaign: campaign)
         }
         .task {
-            await runtime.refreshHeatmap(for: campaign)
+            if campaign.kind != .daily {
+                await runtime.refreshHeatmap(for: campaign)
+            }
         }
         .onChange(of: campaign.persistentModelID) { _, _ in
             jobPage = 0
@@ -247,6 +267,80 @@ struct CampaignDetailView: View {
         VStack(alignment: .leading) {
             Text(title).font(.system(size: 11, design: .rounded)).foregroundStyle(SKTheme.mute)
             Text("\(value)").font(.system(size: 16, weight: .semibold, design: .rounded))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct DailySchedulePanel: View {
+    @Environment(GardenRuntime.self) private var runtime
+    @Bindable var campaign: Campaign
+    @State private var applying = false
+
+    private var today: String { CronTick.dayKey(Date()) }
+    private var remaining: (commits: Int, issues: Int, prs: Int) {
+        campaign.remainingDaily(on: today)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Daily quota")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                Spacer()
+                if campaign.status == .running {
+                    SKTag(
+                        kind: campaign.isDailyCaughtUp ? .completed : .pending,
+                        label: campaign.isDailyCaughtUp ? "Applied today" : "Due today"
+                    )
+                }
+            }
+            Text("Each launch applies remaining commits, issues, and PRs into \(campaign.defaultRepoName) with this campaign’s persona.")
+                .font(.system(size: 12, design: .rounded))
+                .foregroundStyle(SKTheme.mute)
+            Stepper("Commits per day: \(campaign.commitCount)", value: $campaign.commitCount, in: 0...20)
+            Stepper("Issues per day: \(campaign.issueCount)", value: $campaign.issueCount, in: 0...20)
+            Stepper("Pull requests per day: \(campaign.prCount)", value: $campaign.prCount, in: 0...20)
+            HStack {
+                metric("Commits left", remaining.commits, campaign.commitCount)
+                metric("Issues left", remaining.issues, campaign.issueCount)
+                metric("PRs left", remaining.prs, campaign.prCount)
+            }
+            if !campaign.lastScheduleMessage.isEmpty {
+                Text(campaign.lastScheduleMessage)
+                    .font(.system(size: 12, design: .rounded))
+                    .foregroundStyle(campaign.lastScheduleSucceeded ? SKTagKind.completed.tint : SKTheme.coral)
+            }
+            HStack {
+                SKPrimaryButton(
+                    title: applying ? "Applying…" : campaign.isDailyCaughtUp ? "Applied" : "Apply today",
+                    enabled: campaign.status == .running && !applying && !campaign.isDailyCaughtUp
+                ) {
+                    Task {
+                        applying = true
+                        defer { applying = false }
+                        await runtime.applyDailyCampaign(campaign)
+                    }
+                }
+                if let applied = campaign.lastScheduleAt {
+                    Text(applied.formatted(date: .abbreviated, time: .shortened))
+                        .font(.system(size: 11, design: .rounded))
+                        .foregroundStyle(SKTheme.mute)
+                }
+            }
+        }
+        .onChange(of: campaign.commitCount) { _, _ in try? runtime.context.save() }
+        .onChange(of: campaign.issueCount) { _, _ in try? runtime.context.save() }
+        .onChange(of: campaign.prCount) { _, _ in try? runtime.context.save() }
+    }
+
+    private func metric(_ title: String, _ left: Int, _ total: Int) -> some View {
+        VStack(alignment: .leading) {
+            Text(title)
+                .font(.system(size: 11, design: .rounded))
+                .foregroundStyle(SKTheme.mute)
+            Text("\(left)/\(total)")
+                .font(.system(size: 16, weight: .semibold, design: .rounded))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
