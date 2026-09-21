@@ -1,9 +1,11 @@
+import AppKit
 import Foundation
 import SwiftData
 
 @Observable
 final class GardenRuntime {
     let modelContainer: ModelContainer
+    weak var mainWindow: NSWindow?
     private var clients: [String: GitHubClient] = [:]
     private var accountTasks: [String: Task<Void, Never>] = [:]
     private var runningLogins: Set<String> = []

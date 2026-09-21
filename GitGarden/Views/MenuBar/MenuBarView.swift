@@ -24,7 +24,12 @@ struct MenuBarView: View {
                     .foregroundStyle(SKTheme.inkColor(for: scheme))
                 Spacer()
                 Button {
-                    openWindow(id: "main")
+                    if let window = runtime.mainWindow, window.isVisible || window.isMiniaturized {
+                        if window.isMiniaturized { window.deminiaturize(nil) }
+                        window.makeKeyAndOrderFront(nil)
+                    } else {
+                        openWindow(id: "main")
+                    }
                     NSApp.activate(ignoringOtherApps: true)
                 } label: {
                     Image(systemName: "macwindow")
