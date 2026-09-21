@@ -120,7 +120,7 @@ final class GardenRuntime {
         do {
             let rem = campaign.remainingDaily(on: today)
             if rem.commits > 0 || rem.prs > 0 || rem.issues > 0 {
-                notes.append(contentsOf: try applyDailyActions(campaign: campaign, account: account, day: today))
+                notes.append(contentsOf: try await applyDailyActions(campaign: campaign, account: account, day: today))
             }
             let leftover = campaign.remainingDaily(on: today)
             campaign.lastScheduleAt = Date()
@@ -139,7 +139,9 @@ final class GardenRuntime {
         }
     }
 
-    private func applyDailyActions(campaign: Campaign, account: Account, day: String) throws -> [String] {
+    // Every git/gh call is a blocking Process, so the daily path runs each phase
+    // in a detached task and only touches SwiftData back on the main actor.
+    private func applyDailyActions(campaign: Campaign, account: Account, day: String) async throws -> [String] {
         let persona = persona(for: campaign.personaID.isEmpty ? account.personaID : campaign.personaID)
         let ref = RepoRef.parse(campaign.repoName, defaultOwner: account.login)
         let owner = ref?.owner ?? account.login
@@ -149,7 +151,7 @@ final class GardenRuntime {
         var notes: [String] = []
         let rem = campaign.remainingDaily(on: day)
         if rem.commits > 0 || rem.prs > 0 {
-            notes.append(contentsOf: try applyDailyGit(
+            notes.append(contentsOf: try await applyDailyGit(
                 campaign: campaign,
                 account: account,
                 owner: owner,
@@ -163,11 +165,14 @@ final class GardenRuntime {
             ))
         }
         for index in 0..<rem.issues {
-            var rng = SeededGenerator(seed: dailySeed(login: account.login, day: day, kind: "issue", index: campaign.appliedIssuesToday + index))
-            let slug = rng.pick(persona.slugs)
-            let title = MessageGenerator.fill(rng.pick(persona.issueTitles), slug: slug)
-            let body = MessageGenerator.fill(rng.pick(persona.issueBodies), slug: slug)
-            let issue = try gh.createIssue(owner: owner, repo: repo, title: title, body: body)
+            let seed = dailySeed(login: account.login, day: day, kind: "issue", index: campaign.appliedIssuesToday + index)
+            let issue = try await Task.detached { () -> (number: Int, url: String) in
+                var rng = SeededGenerator(seed: seed)
+                let slug = rng.pick(persona.slugs)
+                let title = MessageGenerator.fill(rng.pick(persona.issueTitles), slug: slug)
+                let body = MessageGenerator.fill(rng.pick(persona.issueBodies), slug: slug)
+                return try gh.createIssue(owner: owner, repo: repo, title: title, body: body)
+            }.value
             guard issue.number > 0, !issue.url.isEmpty else {
                 throw GitGardenError.gitFailed("Issue create did not return a GitHub URL.")
             }
@@ -190,20 +195,26 @@ final class GardenRuntime {
         commitCount: Int,
         prCount: Int,
         gh: GitHubCLI
-    ) throws -> [String] {
+    ) async throws -> [String] {
         let git = BackdatedCommitEngine()
         let root = settings().resolvedWorktreePath.appendingPathComponent("daily-\(account.login)-\(repo)", isDirectory: true)
-        try git.ensureExistingClone(at: root, owner: owner, repo: repo, token: account.token, gh: gh)
+        let login = account.login
+        let token = account.token
         let name = account.name.isEmpty ? account.login : account.name
         let email = account.email.isEmpty ? "\(account.login)@users.noreply.github.com" : account.email
-        try git.configureIdentity(at: root, name: name, email: email)
-        try git.checkoutMain(at: root, named: defaultBranch)
         var notes: [String] = []
-        if commitCount > 0 {
-            for index in 0..<commitCount {
-                var rng = SeededGenerator(seed: dailySeed(login: account.login, day: day, kind: "commit", index: campaign.appliedCommitsToday + index))
+        let appliedCommits = campaign.appliedCommitsToday
+        let commitSeeds = (0..<commitCount).map { index in
+            dailySeed(login: login, day: day, kind: "commit", index: appliedCommits + index)
+        }
+        try await Task.detached {
+            try git.ensureExistingClone(at: root, owner: owner, repo: repo, token: token, gh: gh)
+            try git.configureIdentity(at: root, name: name, email: email)
+            try git.checkoutMain(at: root, named: defaultBranch)
+            for (index, seed) in commitSeeds.enumerated() {
+                var rng = SeededGenerator(seed: seed)
                 let slug = rng.pick(persona.slugs)
-                let stamp = campaign.appliedCommitsToday + index + 1
+                let stamp = appliedCommits + index + 1
                 try git.writeFiles(
                     at: root,
                     files: [FileChange(path: ".gitgarden/daily-\(day)-\(stamp).txt", content: "\(slug)\n")]
@@ -216,33 +227,40 @@ final class GardenRuntime {
                     email: email
                 )
             }
-            try git.push(at: root, branch: defaultBranch)
+            if !commitSeeds.isEmpty {
+                try git.push(at: root, branch: defaultBranch)
+            }
+        }.value
+        if commitCount > 0 {
             campaign.appliedCommitsToday += commitCount
             notes.append("\(commitCount) commit\(commitCount == 1 ? "" : "s")")
             try context.save()
         }
         for index in 0..<prCount {
-            try git.checkoutMain(at: root, named: defaultBranch)
-            var rng = SeededGenerator(seed: dailySeed(login: account.login, day: day, kind: "pr", index: campaign.appliedPRsToday + index))
-            let slug = rng.pick(persona.slugs)
-            let branch = MessageGenerator.branchName(persona: persona, slug: slug, rng: &rng)
-            try git.checkoutBranch(at: root, name: branch)
+            let seed = dailySeed(login: login, day: day, kind: "pr", index: campaign.appliedPRsToday + index)
             let stamp = campaign.appliedPRsToday + index + 1
-            try git.writeFiles(
-                at: root,
-                files: [FileChange(path: ".gitgarden/pr-\(day)-\(stamp).txt", content: "\(slug)\n")]
-            )
-            try git.commit(
-                at: root,
-                message: MessageGenerator.commitMessage(persona: persona, slug: slug, rng: &rng),
-                date: Date(),
-                name: name,
-                email: email
-            )
-            try git.push(at: root, branch: branch)
-            let title = MessageGenerator.fill(rng.pick(persona.prTitles), slug: slug)
-            let body = MessageGenerator.fill(rng.pick(persona.prBodies), slug: slug)
-            let pull = try gh.createPull(owner: owner, repo: repo, title: title, body: body, head: branch, base: defaultBranch)
+            let pull = try await Task.detached { () -> (number: Int, url: String) in
+                try git.checkoutMain(at: root, named: defaultBranch)
+                var rng = SeededGenerator(seed: seed)
+                let slug = rng.pick(persona.slugs)
+                let branch = MessageGenerator.branchName(persona: persona, slug: slug, rng: &rng)
+                try git.checkoutBranch(at: root, name: branch)
+                try git.writeFiles(
+                    at: root,
+                    files: [FileChange(path: ".gitgarden/pr-\(day)-\(stamp).txt", content: "\(slug)\n")]
+                )
+                try git.commit(
+                    at: root,
+                    message: MessageGenerator.commitMessage(persona: persona, slug: slug, rng: &rng),
+                    date: Date(),
+                    name: name,
+                    email: email
+                )
+                try git.push(at: root, branch: branch)
+                let title = MessageGenerator.fill(rng.pick(persona.prTitles), slug: slug)
+                let body = MessageGenerator.fill(rng.pick(persona.prBodies), slug: slug)
+                return try gh.createPull(owner: owner, repo: repo, title: title, body: body, head: branch, base: defaultBranch)
+            }.value
             guard pull.number > 0, !pull.url.isEmpty else {
                 throw GitGardenError.gitFailed("Pull request create did not return a GitHub URL.")
             }
